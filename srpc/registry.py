@@ -30,7 +30,8 @@ class SRPCRegistry:
         self.services = {}
     
     def close(self):
-        self.socket.close()        
+        self.socket.close()      
+        print("Registry closed")  
 
     def handle_heartbeat(self, info = {}):
         self.services[info["name"]] = {
@@ -44,13 +45,12 @@ class SRPCRegistry:
         services_list = {name: info["address"] for name, info in self.services.items()}
         return {"status":"ok", "services": services_list}
 
-    def serve(self):
-        print("Registry started...")
+    def srpc_serve(self):
         while True:
             try:
                 # show info
                 clear_screen()
-                print(f"** SRPC REGISTRY [{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] **")
+                print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self.host}:{self.port} ")
                 print()
                 for name, info in self.services.items():
                     print(f">> SERVICE {name} RUNNING ON {info.get('address')} | LAST INFO AT [{info.get('ts')}]")
@@ -88,4 +88,4 @@ class SRPCRegistry:
 
 if __name__ == "__main__":
     registry = SRPCRegistry()
-    registry.serve()
+    registry.srpc_serve()

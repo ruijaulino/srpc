@@ -75,7 +75,7 @@ class StoreClient(SRPCClient):
 
 def store_service(host, port):
     server = Store(service_name = 'store', host = host, port = port)  
-    server.serve()
+    server.srpc_serve()
 
 def test_client():
    
@@ -86,6 +86,7 @@ def test_client():
     print(client.keys())
     print(client.delete('ola'))
     print(client.keys())
+    client.close()
    
 
 if __name__ == "__main__":

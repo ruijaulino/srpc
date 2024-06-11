@@ -75,7 +75,7 @@ def test_client(host, port):
 def test_server(host, port):
     server = StreamerServerExample(service_name = 'stream', host = host, port = port, pub_port = port+1)  
     server.start_stream()
-    server.serve()    
+    server.srpc_serve()    
 
 if __name__ == '__main__':
     host = 'localhost'

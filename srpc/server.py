@@ -127,7 +127,7 @@ class SRPCServer:
                 rep = self.registry_socket.recv()
             time.sleep(REGISTRY_HEARTBEAT)
 
-    def serve(self):
+    def srpc_serve(self):
         clear_screen()
         print(f"Server {self.name} started")
         th = threading.Thread(target = self.registry_heartbeat)
@@ -179,4 +179,4 @@ if __name__ == "__main__":
     server.register_function(subtract)
     server.register_class(ExampleClass)  
 
-    server.serve()
+    server.srpc_serve()
