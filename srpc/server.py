@@ -13,10 +13,11 @@ except ImportError:
 import threading
 
 class SRPCServer:
-    def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT):
+    def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, cs = True):
         self.name = name
         self.host = host
         self.port = port
+        self.cs = cs
         pub_port = pub_port if pub_port is not None else port+1
 
         self.socket = SocketReqRep(
@@ -113,6 +114,9 @@ class SRPCServer:
         self.pub_socket.close()
         print(f"Server {self.name} closed")
 
+    def close(self):
+        self.srpc_close()
+
     def registry_heartbeat(self):
         while not self.stop_event.isSet(): 
             req = {
@@ -128,7 +132,7 @@ class SRPCServer:
             time.sleep(REGISTRY_HEARTBEAT)
 
     def srpc_serve(self):
-        clear_screen()
+        if self.cs: clear_screen()
         print(f"Server {self.name} started")
         th = threading.Thread(target = self.registry_heartbeat)
         th.start()
@@ -154,8 +158,8 @@ class SRPCServer:
         self.stop_event.set()
         print(f'Server {self.name} joining threads..')
         th.join()
-        self.srpc_close()
-
+        self.close()
+        
 if __name__ == "__main__":
 
 

@@ -23,6 +23,12 @@ class StreamerServerExample(SRPCServer):
             self.publish("somekey", np.random.normal(self.m, self.s))
             time.sleep(0.5)
 
+    # as an example, override the close
+    def close(self):
+        self.srpc_close()
+        self.th.join()
+        print('Done overriden close')
+
     def start_stream(self):
         self.th = threading.Thread(target = self.stream, daemon = True)
         self.th.start()
@@ -80,5 +86,5 @@ def test_server(host, port):
 if __name__ == '__main__':
     host = 'localhost'
     port = 6000
-    test_client(host, port)
-    # test_server(host, port)
+    # test_client(host, port)
+    test_server(host, port)
