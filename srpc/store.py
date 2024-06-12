@@ -90,5 +90,5 @@ def test_client():
    
 
 if __name__ == "__main__":
-    # store_service("localhost", 5550)
-    test_client()
+    store_service("localhost", 5550)
+    # test_client()

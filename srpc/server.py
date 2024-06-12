@@ -107,7 +107,7 @@ class SRPCServer:
                         rep = {"status":"error", "msg": str(e)}         
         return rep
 
-    def close(self):
+    def srpc_close(self):
         self.socket.close()
         self.registry_socket.close()
         self.pub_socket.close()
@@ -154,7 +154,7 @@ class SRPCServer:
         self.stop_event.set()
         print(f'Server {self.name} joining threads..')
         th.join()
-        self.close()
+        self.srpc_close()
 
 if __name__ == "__main__":
 
