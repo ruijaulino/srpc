@@ -73,7 +73,7 @@ class StoreClient(SRPCClient):
         return self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
         return self.parse(rep)
 
-def store_service(host, port):
+def store_service(host, port, name = 'store'):
     server = Store(service_name = 'store', host = host, port = port)  
     server.srpc_serve()
 
