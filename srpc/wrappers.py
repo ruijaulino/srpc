@@ -30,8 +30,9 @@ class SocketPub:
         self.connected = True
 
     def publish(self, key:str, value:any):
-        msg = f"{key} {value}"
-        self.socket.send_string(msg)
+        if self.connected:
+            msg = f"{key} {value}"
+            self.socket.send_string(msg)
     
     def close(self):
         if self.connected:
@@ -59,14 +60,16 @@ class SocketSub:
         if self.recvtimeo is not None:
             self.socket.setsockopt(zmq.RCVTIMEO, self.recvtimeo)
         self.socket.setsockopt(zmq.LINGER, 0)
+        self.connected = True
 
     def subscribe(self, key):
-        if self.key is not None:
-            self.socket.setsockopt_string(zmq.UNSUBSCRIBE, self.key)
-            # print(f"Unsubscribed from key: {self.key}")
-        self.key = key
-        self.socket.setsockopt_string(zmq.SUBSCRIBE, self.key)
-        # print(f"Subscribed to key: {self.key}")
+        if self.connected:
+            if self.key is not None:
+                self.socket.setsockopt_string(zmq.UNSUBSCRIBE, self.key)
+                # print(f"Unsubscribed from key: {self.key}")
+            self.key = key
+            self.socket.setsockopt_string(zmq.SUBSCRIBE, self.key)
+            # print(f"Subscribed to key: {self.key}")
     
     def recv(self):
         if self.key is None: return None,None
@@ -78,8 +81,10 @@ class SocketSub:
             return None, None
     
     def close(self):
+        self.connected = False
         self.socket.close()
         self.context.term()
+
 
 class SocketReqRep:
     """
