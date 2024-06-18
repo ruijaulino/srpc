@@ -35,7 +35,8 @@ class SRPCRegistry:
 
     def handle_heartbeat(self, info = {}):
         self.services[info["name"]] = {
-                                        "address": info["address"],
+                                        "req_address": info.get("req_address",'unk'),
+                                        "pub_address": info.get("pub_address",'unk'),
                                         "last_heartbeat": time.time(),
                                         "ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                         }
@@ -53,7 +54,7 @@ class SRPCRegistry:
                 print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self.host}:{self.port} ")
                 print()
                 for name, info in self.services.items():
-                    print(f">> SERVICE {name} RUNNING ON {info.get('address')} | LAST INFO AT [{info.get('ts')}]")
+                    print(f">> SERVICE {name} | ACCEPT REQ ON {info.get('req_address')} | PUB ON {info.get('pub_address')} | LAST INFO AT [{info.get('ts')}]")
 
                 req = self.socket.recv()
                 if req is not None:                

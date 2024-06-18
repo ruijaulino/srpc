@@ -18,7 +18,7 @@ class SRPCServer:
         self.srpc_host = host
         self.srpc_port = port
         self.cs = cs
-        srpc_pub_port = pub_port if pub_port is not None else port+1
+        self.srpc_pub_port = pub_port if pub_port is not None else port+1
 
         self.socket = SocketReqRep(
                                     host = self.srpc_host, 
@@ -30,7 +30,7 @@ class SRPCServer:
                                     reconnect = reconnect
                                     )
         
-        self.pub_socket = SocketPub(host = self.srpc_host, port = srpc_pub_port)
+        self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port)
 
         self.registry_socket = SocketReqRep(
                                     host = registry_host, 
@@ -124,7 +124,8 @@ class SRPCServer:
                 "action": "heartbeat",
                 "info": {
                     "name": self.name,
-                    "address": f"tcp://{self.srpc_host}:{self.srpc_port}"
+                    "req_address": f"tcp://{self.srpc_host}:{self.srpc_port}",
+                    "pub_address": f"tcp://{self.srpc_host}:{self.srpc_pub_port}"
                 }
             }
             status = self.registry_socket.send(json.dumps(req))
