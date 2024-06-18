@@ -11,8 +11,8 @@ except ImportError:
 
 
 class Store(SRPCServer):
-    def __init__(self, service_name, host, port):
-        SRPCServer.__init__(self, name = service_name, host = host, port = port)
+    def __init__(self, service_name, host, port, pub_port = None):
+        SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = pub_port)
         self.store = {}
         self.locks = {}
         self.global_lock = threading.Lock()
