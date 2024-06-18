@@ -31,9 +31,12 @@ class SocketPub:
 
     def publish(self, key:str, value:any):
         if self.connected:
-            msg = f"{key} {value}"
-            self.socket.send_string(msg)
-    
+            try:
+                msg = f"{key} {value}"
+                self.socket.send_string(msg)
+            except:
+                pass
+                
     def close(self):
         if self.connected:
             self.socket.close()
