@@ -5,14 +5,16 @@ import threading
 try:
     from .server import SRPCServer
     from .client import SRPCClient
+    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 except ImportError:
     from server import SRPCServer
     from client import SRPCClient
+    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 
 
 class Store(SRPCServer):
-    def __init__(self, service_name, host, port, pub_port = None):
-        SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = pub_port)
+    def __init__(self, service_name, host, port, pub_port = None, registry_host = REGISTRY_HOST, registry_port = REGISTRY_PORT):
+        SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = pub_port, registry_host = registry_host, registry_port = registry_port)
         self.store = {}
         self.locks = {}
         self.global_lock = threading.Lock()
