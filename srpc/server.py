@@ -15,14 +15,14 @@ import threading
 class SRPCServer:
     def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, cs = True):
         self.name = name
-        self.host = host
-        self.port = port
+        self.srpc_host = host
+        self.srpc_port = port
         self.cs = cs
-        pub_port = pub_port if pub_port is not None else port+1
+        srpc_pub_port = pub_port if pub_port is not None else port+1
 
         self.socket = SocketReqRep(
-                                    host = host, 
-                                    port = port, 
+                                    host = self.srpc_host, 
+                                    port = self.srpc_port, 
                                     zmq_type = 'REP', 
                                     bind = True, 
                                     recvtimeo = recvtimeo, 
@@ -30,7 +30,7 @@ class SRPCServer:
                                     reconnect = reconnect
                                     )
         
-        self.pub_socket = SocketPub(host = host, port = pub_port)
+        self.pub_socket = SocketPub(host = self.srpc_host, port = srpc_pub_port)
 
         self.registry_socket = SocketReqRep(
                                     host = registry_host, 
@@ -119,11 +119,12 @@ class SRPCServer:
 
     def registry_heartbeat(self):
         while not self.stop_event.isSet(): 
+            # print('send heartbeat ', self.name, f"tcp://{self.srpc_host}:{self.srpc_port}")
             req = {
                 "action": "heartbeat",
                 "info": {
                     "name": self.name,
-                    "address": f"tcp://{self.host}:{self.port}"
+                    "address": f"tcp://{self.srpc_host}:{self.srpc_port}"
                 }
             }
             status = self.registry_socket.send(json.dumps(req))
