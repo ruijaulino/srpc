@@ -33,11 +33,12 @@ class Store(SRPCServer):
         
         Returns an empty dictionary if the file does not exist.
         """
-        if not os.path.exists(self.filename):
-            self.store = {}
-        else:
-            with open(self.filename, 'rb') as file:
-                self.store = pickle.load(file)
+        with self.global_lock:
+            if not os.path.exists(self.filename):
+                self.store = {}
+            else:
+                with open(self.filename, 'rb') as file:
+                    self.store = pickle.load(file)
 
     def write_store(self):
         """Writes a Python object to disk using pickle."""
@@ -69,7 +70,28 @@ class Store(SRPCServer):
         with lock:
             self.store[key] = value
 
-    def get(self, key, sub_key = None):
+    @staticmethod
+    def recursive_get(d, keys):
+        if not keys:
+            return d
+        if not isinstance(d, dict): return None
+        key = keys[0]
+        return Store.recursive_get(d.get(key, None), keys[1:])
+        #if key in d:
+        #    return recursive_get(d[key], keys[1:])
+        #else:
+        #    raise KeyError(f"Key '{key}' not found in dictionary")
+
+
+    def get(self, *keys):
+        with self.global_lock:
+            if not keys: return None 
+        lock = self._get_lock(keys[0])
+        with lock:
+            return Store.recursive_get(self.store, keys)
+
+
+    def sget(self, key, sub_key = None):
         lock = self._get_lock(key)
         with lock:
             if sub_key is not None:
@@ -96,6 +118,10 @@ class StoreClient(SRPCClient):
         else:
             return rep.get('msg')
 
+    def clear(self):
+        rep = self.call(method = 'clear', args = [], kwargs = {}, close = False)
+        return self.parse(rep)
+
     def delete(self, key):
         rep = self.call(method = 'delete', args = [], kwargs = {'key':key}, close = False)
         return self.parse(rep)
@@ -104,9 +130,13 @@ class StoreClient(SRPCClient):
         rep = self.call(method = 'keys', args = [], kwargs = {}, close = False)
         return self.parse(rep)
 
-    def get(self, key):
-        rep = self.call(method = 'get', args = [], kwargs = {'key':key}, close = False)
+    def sget(self, key, sub_key = None):
+        rep = self.call(method = 'sget', args = [], kwargs = {'key':key, 'sub_key': sub_key}, close = False)
         return self.parse(rep)
+
+    def get(self, *keys):
+        rep = self.call(method = 'get', args = keys, kwargs = {}, close = False)
+        return self.parse(rep)        
 
     def set(self, key, value):
         return self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
@@ -119,15 +149,25 @@ def store_service(host, port, name = 'store'):
 def test_client():
    
     client = StoreClient("localhost", 5550)
+    print(client.clear())
     print(client.set('ola',1))
     print(client.get('ola'))
     print(client.get('ole'))
     print(client.keys())
     print(client.delete('ola'))
     print(client.keys())
+    print('multilevel..')
+    print(client.set('d0',{'d1':{'d11':1,'d12':[1,2,3]}}))
+    print(client.get('d0'))
+    print()
+    print(client.get('d0','d1'))
+    print()
+    print(client.get('d0','b','d12'))
+    print()
+
     client.close()
    
 
 if __name__ == "__main__":
-    store_service("localhost", 5550)
-    # test_client()
+    # store_service("localhost", 5550)
+    test_client()
