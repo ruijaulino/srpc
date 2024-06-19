@@ -69,10 +69,13 @@ class Store(SRPCServer):
         with lock:
             self.store[key] = value
 
-    def get(self, key):
+    def get(self, key, sub_key = None):
         lock = self._get_lock(key)
         with lock:
-            return self.store.get(key)
+            if sub_key is not None:
+                return self.store.get(key,{}).get(sub_key)
+            else:
+                return self.store.get(key)
 
     def delete(self, key):
         lock = self._get_lock(key)
