@@ -153,7 +153,8 @@ class SRPCServer:
                         rep = json.dumps({'status': 'error', 'msg': 'Invalid json'})
                         self.socket.send(rep)
                     except Exception as e:
-                        rep = json.dumps({'status': 'error', 'msg': e})
+                        print('SRPCServer error: ', e)
+                        rep = json.dumps({'status': 'error', 'msg': 'unk'})
                         self.socket.send(rep)
             except KeyboardInterrupt:
                 break
