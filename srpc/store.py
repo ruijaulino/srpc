@@ -1,6 +1,8 @@
 # example of a remote dict service with the framework
 
 import threading
+import pickle
+import os
 
 try:
     from .server import SRPCServer
@@ -12,12 +14,41 @@ except ImportError:
     from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 
 
+
+
+
+
 class Store(SRPCServer):
-    def __init__(self, service_name, host, port, pub_port = None, registry_host = REGISTRY_HOST, registry_port = REGISTRY_PORT):
+    def __init__(self, service_name:str, host:str, port:int, pub_port:int = None, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, filename:str = 'store.pkl'):
         SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = pub_port, registry_host = registry_host, registry_port = registry_port)
+        self.filename = filename
         self.store = {}
         self.locks = {}
         self.global_lock = threading.Lock()
+        # read store from disk at close
+        self.read_store()
+
+    def read_store(self):
+        """Reads a Python object from disk using pickle.
+        
+        Returns an empty dictionary if the file does not exist.
+        """
+        if not os.path.exists(self.filename):
+            self.store = {}
+        else:
+            with open(self.filename, 'rb') as file:
+                self.store = pickle.load(file)
+
+    def write_store(self):
+        """Writes a Python object to disk using pickle."""
+        with open(self.filename, 'wb') as file:
+            pickle.dump(self.store, file, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def close(self):
+        # write store to disk at close
+        self.write_store()
+        self.srpc_close()
+
 
     def _get_lock(self, key):
         with self.global_lock:
