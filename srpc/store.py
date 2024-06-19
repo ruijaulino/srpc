@@ -73,7 +73,10 @@ class Store(SRPCServer):
         lock = self._get_lock(key)
         with lock:
             if sub_key is not None:
-                return self.store.get(key,{}).get(sub_key)
+                try:
+                    return self.store.get(key,{}).get(sub_key)
+                except:
+                    return None
             else:
                 return self.store.get(key)
 
