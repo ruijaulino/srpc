@@ -14,6 +14,16 @@ def clear_screen():
     else:
         os.system('clear')
 
+class SRPCTopic:
+    
+    def __init__(self, *args):
+        self.sep = '.'
+        self.parts = []
+        for e in [str(a) for a in args]: self.parts += e.split(self.sep) 
+        self.topic = '.'.join(self.parts)
+    
+    def __str__(self):
+        return self.topic
 
 class SocketPub:
     def __init__(self, host:str, port:int):
@@ -29,10 +39,12 @@ class SocketPub:
         self.socket.bind(self.addr)
         self.connected = True
 
-    def publish(self, key:str, value:any):
+    def publish(self, topic:SRPCTopic, value:any):
+        if isinstance(topic, str):
+            topic = SRPCTopic(topic)
         if self.connected:
             try:
-                msg = f"{key} {value}"
+                msg = f"{topic.topic} {value}"
                 self.socket.send_string(msg)
             except:
                 pass
@@ -59,27 +71,49 @@ class SocketSub:
         self.socket = self.context.socket(zmq.SUB)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
-        self.key = None
+        self.topics = [] #
         if self.recvtimeo is not None:
             self.socket.setsockopt(zmq.RCVTIMEO, self.recvtimeo)
         self.socket.setsockopt(zmq.LINGER, 0)
         self.connected = True
 
-    def subscribe(self, key):
-        if self.connected:
-            if self.key is not None:
-                self.socket.setsockopt_string(zmq.UNSUBSCRIBE, self.key)
-                # print(f"Unsubscribed from key: {self.key}")
-            self.key = key
-            self.socket.setsockopt_string(zmq.SUBSCRIBE, self.key)
-            # print(f"Subscribed to key: {self.key}")
+    def _is_subscribed(self, topic:SRPCTopic):
+        for t in self.topics: 
+            if t.topic == topic.topic:
+                return True
+        return False
+
+    def _delete_topic(self, topic:SRPCTopic):
+        idx = None
+        for i in range(len(self.topics)):
+            if self.topics[i].topic == topic.topic:
+                idx = i
+                break
+        if idx is not None:
+            del self.topics[idx]
+
+    def unsubscribe(self, topic:SRPCTopic):
+        if isinstance(topic, str):
+            topic = SRPCTopic(topic)        
+        if self.connected and self._is_subscribed(topic):
+            self.socket.setsockopt_string(zmq.UNSUBSCRIBE, topic.topic)
+            self._delete_topic(topic = topic)    
+
+    def subscribe(self, topic:SRPCTopic, unsubscribe = True):
+        if isinstance(topic, str):
+            topic = SRPCTopic(topic)
+        if self.connected and not self._is_subscribed(topic):
+            if unsubscribe:
+                self.unsubscribe(topic = topic)
+            self.topics.append(topic)
+            self.socket.setsockopt_string(zmq.SUBSCRIBE, topic.topic)
     
     def recv(self):
-        if self.key is None: return None,None
+        if len(self.topics)==0: return None,None
         try:     
             msg = self.socket.recv_string()
-            key, msg = msg.split(' ', 1)
-            return key, msg
+            topic, msg = msg.split(' ', 1)
+            return SRPCTopic(topic), msg
         except zmq.Again:
             return None, None
     
@@ -87,7 +121,6 @@ class SocketSub:
         self.connected = False
         self.socket.close()
         self.context.term()
-
 
 class SocketReqRep:
     """
@@ -175,3 +208,5 @@ class SocketReqRep:
                 self.close()
                 self.connect()        
         return status
+
+

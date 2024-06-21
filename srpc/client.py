@@ -2,9 +2,9 @@ import zmq
 import json
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub
+    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub
+    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
 
 class SRPCClient:
     def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True):
@@ -26,12 +26,12 @@ class SRPCClient:
         self.socket.close()
         self.sub_socket.close()
 
-    def subscribe(self, key:str):
-        self.sub_socket.subscribe(key)
+    def subscribe(self, topic:SRPCTopic):
+        self.sub_socket.subscribe(topic)
 
     def listen(self):
-        key, msg = self.sub_socket.recv()
-        return key, msg
+        topic, msg = self.sub_socket.recv()
+        return topic, msg
 
     def call(self, method, args = [], kwargs = {}, close = False):
         req = {

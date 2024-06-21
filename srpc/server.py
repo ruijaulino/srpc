@@ -3,9 +3,9 @@ import json
 import time
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub, clear_screen
+    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub, clear_screen
+    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen
 try:
     from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 except ImportError:
@@ -73,8 +73,8 @@ class SRPCServer:
             rep = {"status":"error", "msg": f"Unknown method: {method}"}
         return rep
 
-    def publish(self, key:str, value:str):
-        self.pub_socket.publish(key, value)
+    def publish(self, topic:SRPCTopic, value:str):
+        self.pub_socket.publish(topic, value)
 
     def handle_request(self, request):
         method = request.get("method")

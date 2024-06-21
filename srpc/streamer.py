@@ -9,7 +9,6 @@ except ImportError:
     from client import SRPCClient
 
 
-
 class StreamerServerExample(SRPCServer):
     def __init__(self, service_name, host, port, pub_port = None):
         SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = None)
