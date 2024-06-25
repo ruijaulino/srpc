@@ -144,7 +144,7 @@ class StoreClient(SRPCClient):
 
 def store_service(host, port, name = 'store'):
     server = Store(service_name = 'store', host = host, port = port)  
-    server.srpc_serve()
+    server.serve()
 
 def test_client():
    

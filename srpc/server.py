@@ -134,8 +134,11 @@ class SRPCServer:
             time.sleep(REGISTRY_HEARTBEAT)
 
     def srpc_serve(self):
-        if self.cs: clear_screen()
-        print(f"Server {self.name} started")
+        if self.cs: 
+            clear_screen()
+            self.cs = False
+
+        print(f"Server {self.name} running")
         th = threading.Thread(target = self.registry_heartbeat)
         th.start()
         # send first heartbeat to registry
@@ -159,10 +162,21 @@ class SRPCServer:
             except KeyboardInterrupt:
                 break
         self.stop_event.set()
-        print(f'Server {self.name} joining threads..')
+        print(f'Server {self.name} joining threads')
         th.join()
         self.close()
-        
+
+    # call start and then serve
+    # make it easier to dev services
+    def serve(self):
+        if self.cs: 
+            clear_screen()
+            self.cs = False        
+        if hasattr(self, 'start'):
+            print(f"Server {self.name} initializing")
+            self.start()
+        self.srpc_serve()
+
 if __name__ == "__main__":
 
 
@@ -186,4 +200,4 @@ if __name__ == "__main__":
     server.register_function(subtract)
     server.register_class(ExampleClass)  
 
-    server.srpc_serve()
+    server.serve()

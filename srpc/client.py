@@ -26,8 +26,8 @@ class SRPCClient:
         self.socket.close()
         self.sub_socket.close()
 
-    def subscribe(self, topic:SRPCTopic):
-        self.sub_socket.subscribe(topic)
+    def subscribe(self, topic:SRPCTopic, unsubscribe:bool = True):
+        self.sub_socket.subscribe(topic, unsubscribe)
 
     def listen(self):
         topic, msg = self.sub_socket.recv()
