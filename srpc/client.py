@@ -7,7 +7,7 @@ except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
 
 class SRPCClient:
-    def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True):
+    def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True):
         self.host = host
         self.port = port
         sub_port = sub_port if sub_port is not None else port+1
@@ -20,7 +20,7 @@ class SRPCClient:
                                     sndtimeo = sndtimeo, 
                                     reconnect = reconnect
                                     )
-        self.sub_socket = SocketSub(host = host, port = sub_port, recvtimeo = recvtimeo, last_msg_only = last_msg_only)
+        self.sub_socket = SocketSub(host = host, port = sub_port, recvtimeo = sub_recvtimeo, last_msg_only = last_msg_only)
 
     def close(self):
         self.socket.close()
