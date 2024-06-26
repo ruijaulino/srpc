@@ -19,8 +19,13 @@ class SRPCTopic:
     def __init__(self, *args):
         self.sep = '.'
         self.parts = []
-        for e in [str(a) for a in args]: self.parts += e.split(self.sep) 
+        for e in [str(a) for a in args]: self.parts += [self._fix_str(b) for b in e.split(self.sep)]
         self.topic = '.'.join(self.parts)
+
+    def _fix_str(self, s:str):
+        s = s.lower() # in lower case
+        s = s.replace(' ','_') # replace spaces otherwise it will mess the topics
+        return s
     
     def __str__(self):
         return self.topic
@@ -209,4 +214,9 @@ class SocketReqRep:
                 self.connect()        
         return status
 
+
+if __name__ == '__main__':
+    topic = SRPCTopic('ib','ESU4 Index')
+    print(topic)
+    print(topic.parts)
 

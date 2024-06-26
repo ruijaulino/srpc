@@ -109,8 +109,8 @@ class Store(SRPCServer):
                 del self.store[key]
 
 class StoreClient(SRPCClient):
-    def __init__(self, host, port):
-        SRPCClient.__init__(self, host = host, port = port)
+    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100):
+        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100)
 
     def parse(self, rep):
         if rep.get('status') == "ok":
