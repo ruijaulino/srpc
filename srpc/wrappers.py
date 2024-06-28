@@ -5,6 +5,8 @@ import signal
 import threading
 import sys
 import os
+from multiprocessing import Process, Queue
+import queue
 
 def clear_screen():
     # For Windows
@@ -13,6 +15,43 @@ def clear_screen():
     # For macOS and Linux
     else:
         os.system('clear')
+
+
+class QueueWrapper(object):
+    def __init__(self, max_size=2048):
+        self.q = Queue(max_size)
+
+    def get(self, timeout=0):
+        out = None
+        try:
+            out = self.q.get(True, timeout)
+        except queue.Empty:
+            pass
+        return out
+
+    def get_all(self, timeout=0):
+        out = []
+        while True:
+            tmp = self.get(timeout=timeout)
+            if tmp is not None:
+                out.append(tmp)
+            else:
+                break
+        if len(out) == 0:
+            out = None
+        else:
+            return out
+
+    def put(self, obj, timeout=0):
+        status = 1
+        try:
+            self.q.put(obj, True, timeout)
+            status = 0
+        except queue.Full:
+            pass
+        return status
+
+
 
 class SRPCTopic:
     

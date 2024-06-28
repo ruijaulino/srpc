@@ -3,17 +3,17 @@ import json
 import time
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen
+    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen
+    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper
 try:
-    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 except ImportError:
-    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 import threading
 
 class SRPCServer:
-    def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, cs = True):
+    def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, queue_size:int = 2048, cs = True):
         self.name = name
         self.srpc_host = host
         self.srpc_port = port
@@ -47,6 +47,8 @@ class SRPCServer:
         self.class_instances = {}        
         self.last_heartbeat = time.time()
         self.stop_event = threading.Event()
+        self.pub_queue = QueueWrapper(4096)
+
 
     def register_function(self, func, name=None):
         if name is None:
@@ -74,7 +76,8 @@ class SRPCServer:
         return rep
 
     def publish(self, topic:SRPCTopic, value:str):
-        self.pub_socket.publish(topic, value)
+        s = self.pub_queue.put([topic, value])
+        if s == 1: print('Warning: pub queue is full.')
 
     def handle_request(self, request):
         method = request.get("method")
@@ -133,14 +136,23 @@ class SRPCServer:
                 rep = self.registry_socket.recv()
             time.sleep(REGISTRY_HEARTBEAT)
 
+    def publisher(self):
+        while not self.stop_event.isSet(): 
+            tmp = self.pub_queue.get(PUBLISH_PERIOD)
+            if tmp is not None:
+                # for e in tmp:
+                self.pub_socket.publish(tmp[0], tmp[1])
+
     def srpc_serve(self):
         if self.cs: 
             clear_screen()
             self.cs = False
 
         print(f"Server {self.name} running")
-        th = threading.Thread(target = self.registry_heartbeat)
-        th.start()
+        reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
+        reg_th.start()
+        pub_th = threading.Thread(target = self.publisher, daemon = True)
+        pub_th.start()        
         # send first heartbeat to registry
         while True:
             try:
@@ -163,7 +175,8 @@ class SRPCServer:
                 break
         self.stop_event.set()
         print(f'Server {self.name} joining threads')
-        th.join()
+        reg_th.join()
+        pub_th.join()
         self.close()
 
     # call start and then serve
