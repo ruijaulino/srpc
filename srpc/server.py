@@ -47,7 +47,7 @@ class SRPCServer:
         self.class_instances = {}        
         self.last_heartbeat = time.time()
         self.stop_event = threading.Event()
-        self.pub_queue = QueueWrapper(4096)
+        self.pub_queue = QueueWrapper(4*4096)
 
 
     def register_function(self, func, name=None):
@@ -85,6 +85,11 @@ class SRPCServer:
         kwargs = request.get("kwargs", {}) 
         
         if hasattr(self, method):
+
+            # method = getattr(self, method)
+            # value = method(*args, **kwargs)
+            # rep = {"status":"ok", "value": value}
+
             try:
                 method = getattr(self, method)
                 value = method(*args, **kwargs)
@@ -122,19 +127,23 @@ class SRPCServer:
 
     def registry_heartbeat(self):
         while not self.stop_event.isSet(): 
-            # print('send heartbeat ', self.name, f"tcp://{self.srpc_host}:{self.srpc_port}")
-            req = {
-                "action": "heartbeat",
-                "info": {
-                    "name": self.name,
-                    "req_address": f"tcp://{self.srpc_host}:{self.srpc_port}",
-                    "pub_address": f"tcp://{self.srpc_host}:{self.srpc_pub_port}"
+            try:
+                # print('send heartbeat ', self.name, f"tcp://{self.srpc_host}:{self.srpc_port}")
+                req = {
+                    "action": "heartbeat",
+                    "info": {
+                        "name": self.name,
+                        "req_address": f"tcp://{self.srpc_host}:{self.srpc_port}",
+                        "pub_address": f"tcp://{self.srpc_host}:{self.srpc_pub_port}"
+                    }
                 }
-            }
-            status = self.registry_socket.send(json.dumps(req))
-            if status == 1:
-                rep = self.registry_socket.recv()
-            time.sleep(REGISTRY_HEARTBEAT)
+                status = self.registry_socket.send(json.dumps(req))
+                if status == 1:
+                    rep = self.registry_socket.recv()
+                time.sleep(REGISTRY_HEARTBEAT)
+            except:
+                print('Error in registry_heartbeat')
+                pass
 
     def publisher(self):
         while not self.stop_event.isSet(): 
