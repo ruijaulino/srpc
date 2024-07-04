@@ -8,6 +8,7 @@ import os
 from multiprocessing import Process, Queue
 import queue
 
+
 def clear_screen():
     # For Windows
     if os.name == 'nt':
@@ -20,8 +21,10 @@ def clear_screen():
 class QueueWrapper(object):
     def __init__(self, max_size=2048):
         self.q = Queue(max_size)
+        self.lock = threading.Lock()
 
     def get(self, timeout=0):
+        # with self.lock:
         out = None
         try:
             out = self.q.get(True, timeout)
@@ -43,6 +46,7 @@ class QueueWrapper(object):
             return out
 
     def put(self, obj, timeout=0):
+        # with self.lock:
         status = 1
         try:
             self.q.put(obj, True, timeout)
