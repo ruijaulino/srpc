@@ -121,6 +121,8 @@ class SRPCServer:
         self.socket.close()
         self.registry_socket.close()
         self.pub_socket.close()
+        self.pub_queue.close() 
+        self.pub_queue = None
         print(f"Server {self.name} closed")
 
     def close(self):

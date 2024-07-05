@@ -5,9 +5,9 @@ import signal
 import threading
 import sys
 import os
-from multiprocessing import Process, Queue
+from multiprocessing import Process# , Queue
 import queue
-
+from queue import Queue
 
 def clear_screen():
     # For Windows
@@ -21,11 +21,19 @@ def clear_screen():
 class QueueWrapper(object):
     def __init__(self, max_size=2048):
         self.q = Queue(max_size)
-        self.lock = threading.Lock()
+        self.active = threading.Event()
+        self.active.set()
+
+
+    def close(self):
+        pass
+        # self.active.clear()
+        # self.q.close() 
+        # self.q.join_thread()
 
     def get(self, timeout=0):
-        # with self.lock:
         out = None
+        # if self.active.isSet():
         try:
             out = self.q.get(True, timeout)
         except queue.Empty:
@@ -46,8 +54,9 @@ class QueueWrapper(object):
             return out
 
     def put(self, obj, timeout=0):
-        # with self.lock:
         status = 1
+        # if self.active.isSet():
+            # with self.lock:
         try:
             self.q.put(obj, True, timeout)
             status = 0
