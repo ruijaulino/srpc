@@ -1,4 +1,4 @@
-from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 from .registry import SRPCRegistry
 from .server import SRPCServer
 from .client import SRPCClient
