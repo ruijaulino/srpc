@@ -7,15 +7,12 @@ import os
 try:
     from .server import SRPCServer
     from .client import SRPCClient
-    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+
 except ImportError:
     from server import SRPCServer
     from client import SRPCClient
-    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
-
-
-
-
+    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 
 class Store(SRPCServer):
@@ -109,8 +106,8 @@ class Store(SRPCServer):
                 del self.store[key]
 
 class StoreClient(SRPCClient):
-    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100):
-        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100)
+    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
+        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     def parse(self, rep):
         if rep.get('status') == "ok":

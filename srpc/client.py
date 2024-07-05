@@ -3,13 +3,18 @@ import json
 
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from .defaults import NO_REP_MSG, NO_REQ_MSG
 except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from defaults import NO_REP_MSG, NO_REQ_MSG
+
 
 class SRPCClient:
-    def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True):
+    def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
         self.host = host
         self.port = port
+        self.no_rep_msg = no_rep_msg
+        self.no_req_msg = no_req_msg
         sub_port = sub_port if sub_port is not None else port+1
         self.socket = SocketReqRep(
                                     host = host, 
@@ -47,9 +52,9 @@ class SRPCClient:
             if rep is not None:                
                 rep = json.loads(rep)
             else:
-                rep = {"status":"error", "msg":"could not get a response from server"}
+                rep = {"status":"error", "msg":self.no_rep_msg}
         else:
-            rep = {"status":"error", "msg":"could not send to server"}
+            rep = {"status":"error", "msg":self.no_req_msg}
         if close: self.close()
         return rep
 
