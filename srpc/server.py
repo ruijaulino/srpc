@@ -61,20 +61,6 @@ class SRPCServer:
         self.classes[name] = cls
         self.class_instances[name] = cls()
 
-    def handle_request(self, request):
-        method = request.get("method")
-        args = request.get("args", []) 
-        kwargs = request.get("kwargs", {}) 
-        if method in self.functions:
-            try:
-                value = self.functions[method](*args, **kwargs)
-                rep = {"status":"ok", "value": value}
-            except Exception as e:
-                rep = {"status":"error", "msg": str(e)}
-        else:
-            rep = {"status":"error", "msg": f"Unknown method: {method}"}
-        return rep
-
     def publish(self, topic:SRPCTopic, value:str):
         if not self.stop_event.isSet(): 
             s = self.pub_queue.put([topic, value])
@@ -86,11 +72,6 @@ class SRPCServer:
         kwargs = request.get("kwargs", {}) 
         
         if hasattr(self, method):
-
-            # method = getattr(self, method)
-            # value = method(*args, **kwargs)
-            # rep = {"status":"ok", "value": value}
-
             try:
                 method = getattr(self, method)
                 value = method(*args, **kwargs)
