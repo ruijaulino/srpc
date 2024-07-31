@@ -12,6 +12,16 @@ except ImportError:
     from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 import threading
 
+
+# function to build a response from the server
+# easier to check how the server responds
+
+OK_STATUS = 'ok'
+ERROR_STATUS = 'error'
+
+def build_server_response(status:str, output, error_msg:str):
+    return {'status':status, 'output':output, 'error_msg':error_msg}
+
 class SRPCServer:
     def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, queue_size:int = 2048, cs = True):
         self.name = name
@@ -74,28 +84,29 @@ class SRPCServer:
         if hasattr(self, method):
             try:
                 method = getattr(self, method)
-                value = method(*args, **kwargs)
-                rep = {"status":"ok", "value": value}
-            except Exception as e:
-                rep = {"status":"error", "msg": str(e)}
+                out = method(*args, **kwargs)
+                rep = build_server_response(status = OK_STATUS, output = out, error_msg = '')
 
+            except Exception as e:
+                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))
+                
         elif method in self.functions:
             try:
-                value = self.functions[method](*args, **kwargs)
-                rep = {"status":"ok", "value": value}
+                out = self.functions[method](*args, **kwargs)
+                rep = build_server_response(status = OK_STATUS, output = out, error_msg = '')
             except Exception as e:
-                rep = {"status":"error", "msg": str(e)}
+                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))
         else:
-            rep = {"status":"error", "msg": f"Unknown method: {method}"}
+            rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = f"Unknown method: {method}")
             if "." in method:
                 class_name, method_name = method.split('.', 1)
                 if class_name in self.class_instances and hasattr(self.class_instances[class_name], method_name):
                     try:
                         method = getattr(self.class_instances[class_name], method_name)
-                        value = method(*args, **kwargs)
-                        rep = {"status":"ok", "value": value}
+                        out = method(*args, **kwargs)
+                        rep = build_server_response(status = OK_STATUS, output = out, error_msg = '')
                     except Exception as e:
-                        rep = {"status":"error", "msg": str(e)}         
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))      
         return rep
 
     def srpc_close(self):
@@ -146,7 +157,7 @@ class SRPCServer:
         reg_th.start()
         pub_th = threading.Thread(target = self.publisher, daemon = True)
         pub_th.start()        
-        # send first heartbeat to registry
+        
         while True:
             try:
                 req = self.socket.recv()
@@ -158,11 +169,11 @@ class SRPCServer:
                         rep = json.dumps(rep)
                         self.socket.send(rep)
                     except json.JSONDecodeError:
-                        rep = json.dumps({'status': 'error', 'msg': 'Invalid json'})
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = 'Invalid json')     
                         self.socket.send(rep)
                     except Exception as e:
                         print('SRPCServer error: ', e)
-                        rep = json.dumps({'status': 'error', 'msg': 'unk'})
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
                         self.socket.send(rep)
             except KeyboardInterrupt:
                 break

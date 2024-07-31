@@ -3,9 +3,11 @@ import json
 
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from .server import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
 except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from server import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG
 
 
@@ -52,11 +54,21 @@ class SRPCClient:
             if rep is not None:                
                 rep = json.loads(rep)
             else:
-                rep = {"status":"error", "msg":self.no_rep_msg}
+                # this should emulate the response from the server
+                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
         else:
-            rep = {"status":"error", "msg":self.no_req_msg}
+            # this should emulate the response from the server
+            rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_req_msg)
         if close: self.close()
         return rep
+
+    # implement a method to parse the responses from the server
+    # this seems to be practical
+    def parse(self, rep):
+        if rep.get('status') == OK_STATUS:
+            return rep.get('output')
+        else:
+            return rep.get('error_msg')
 
 if __name__ == "__main__":
 

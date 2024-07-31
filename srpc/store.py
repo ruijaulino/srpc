@@ -109,11 +109,11 @@ class StoreClient(SRPCClient):
     def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
         SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
-    def parse(self, rep):
-        if rep.get('status') == "ok":
-            return rep.get('value')
-        else:
-            return rep.get('msg')
+    #def parse(self, rep):
+    #    if rep.get('status') == "ok":
+    #        return rep.get('value')
+    #    else:
+    #        return rep.get('msg')
 
     def clear(self):
         rep = self.call(method = 'clear', args = [], kwargs = {}, close = False)
@@ -136,7 +136,7 @@ class StoreClient(SRPCClient):
         return self.parse(rep)        
 
     def set(self, key, value):
-        return self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
+        rep = self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
         return self.parse(rep)
 
 def store_service(host, port, name = 'store'):
