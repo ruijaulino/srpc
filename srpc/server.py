@@ -75,6 +75,9 @@ class SRPCServer:
         if not self.stop_event.isSet(): 
             s = self.pub_queue.put([topic, value])
             if s == 1: print('Warning: pub queue is full.')
+            return 1
+        else:
+            return 0
 
     def handle_request(self, request):
         method = request.get("method")

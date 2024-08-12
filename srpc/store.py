@@ -139,6 +139,10 @@ class StoreClient(SRPCClient):
         rep = self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
         return self.parse(rep)
 
+    def publish(self, topic:SRPCTopic, value:str):
+        rep = self.call(method = 'publish', args = [], kwargs = {'topic':key, 'value':value}, close = False)
+        return self.parse(rep)
+
 def store_service(host, port, name = 'store'):
     server = Store(service_name = 'store', host = host, port = port)  
     server.serve()
