@@ -147,7 +147,6 @@ class SRPCServer:
         while not self.stop_event.isSet(): 
             tmp = self.pub_queue.get(PUBLISH_PERIOD)
             if tmp is not None:
-                # for e in tmp:
                 self.pub_socket.publish(tmp[0], tmp[1])
 
     def srpc_serve(self):

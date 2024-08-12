@@ -3,14 +3,16 @@
 import threading
 import pickle
 import os
-
+import datetime as dt
 try:
     from .server import SRPCServer
+    from .wrappers import SRPCTopic   
     from .client import SRPCClient
     from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 except ImportError:
     from server import SRPCServer
+    from wrappers import SRPCTopic
     from client import SRPCClient
     from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
@@ -24,6 +26,9 @@ class Store(SRPCServer):
         self.global_lock = threading.Lock()
         # read store from disk at close
         self.read_store()
+
+    def set_default_store(self):
+        self.store = {'pub_msgs':{}}
 
     def read_store(self):
         """Reads a Python object from disk using pickle.
@@ -104,10 +109,28 @@ class Store(SRPCServer):
         with lock:
             if key in self.store:
                 del self.store[key]
+    
+    # override publish method
+    def publish(self, topic:SRPCTopic, value:str, save:bool = True):
+        if save:
+            tmp = self.get('published')
+            if tmp is None: tmp = {}
+            if isinstance(topic, str):  
+                tmp.update({topic:{'value':value, 'ts':dt.datetime.now().strftime('%Y-%m-%d %H:%M%S')}})
+            else:
+                tmp.update({topic.topic:{'value':value, 'ts':dt.datetime.now().strftime('%Y-%m-%d %H:%M%S')}})
+            self.set('published', tmp)
+        if not self.stop_event.isSet(): 
+            s = self.pub_queue.put([topic, value])
+            if s == 1: print('Warning: pub queue is full.')
+            return 1
+        else:
+            return 0
+
 
 class StoreClient(SRPCClient):
-    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
-        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
+    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
+        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     #def parse(self, rep):
     #    if rep.get('status') == "ok":
@@ -140,7 +163,7 @@ class StoreClient(SRPCClient):
         return self.parse(rep)
 
     def publish(self, topic:SRPCTopic, value:str):
-        rep = self.call(method = 'publish', args = [], kwargs = {'topic':key, 'value':value}, close = False)
+        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic, 'value':value}, close = False)
         return self.parse(rep)
 
 def store_service(host, port, name = 'store'):

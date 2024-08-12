@@ -9,5 +9,7 @@ if __name__ == '__main__':
     print(client.keys())
     print(client.delete('ola'))
     print(client.keys())
+    print()
+    print(client.get('published'))
     client.close()
    
