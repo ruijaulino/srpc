@@ -196,6 +196,12 @@ class SRPCServer:
             self.start()
         self.srpc_serve()
 
+    def start(self):
+        '''
+        override this method
+        '''
+        pass
+
 if __name__ == "__main__":
 
 

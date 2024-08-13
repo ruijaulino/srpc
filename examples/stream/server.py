@@ -24,7 +24,7 @@ class StreamerServerExample(SRPCServer):
         self.th.join()
         print('Done overriden close')
 
-    def start_stream(self):
+    def start(self):
         self.th = threading.Thread(target = self.stream, daemon = True)
         self.th.start()
 
@@ -34,11 +34,9 @@ class StreamerServerExample(SRPCServer):
     def set_s(self, s):
         self.s = s
 
-
 def test_server(host, port):
     server = StreamerServerExample(service_name = 'stream_example', host = host, port = port, pub_port = port+1)  
-    server.start_stream()
-    server.srpc_serve()    
+    server.serve()    
 
 if __name__ == '__main__':
     host = 'localhost'

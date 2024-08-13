@@ -20,4 +20,4 @@ if __name__ == "__main__":
     server.register_function(add)
     server.register_function(subtract)
     server.register_class(ExampleClass)  
-    server.srpc_serve()
+    server.serve()

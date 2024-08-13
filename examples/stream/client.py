@@ -32,14 +32,17 @@ if __name__ == '__main__':
     print(client.set_m(10))
     c = 0
     while True:
-        print(client.listen())
+        topic, msg = client.listen()
+        if topic is not None:
+            print(topic.topic, msg)
         c+=1
         if c>5:
             break
     print(client.set_m(-10))
     c = 0
     while True:
-        print(client.listen())
+        if topic is not None:
+            print(topic.topic, msg)
         c+=1
         if c>5:
             break

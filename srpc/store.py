@@ -111,7 +111,8 @@ class Store(SRPCServer):
                 del self.store[key]
     
     # override publish method
-    def publish(self, topic:SRPCTopic, value:str, save:bool = True):
+    def publish(self, topic:str, value:str, save:bool = True):
+        topic = SRPCTopic(topic)
         if save:
             tmp = self.get('published')
             if tmp is None: tmp = {}
@@ -163,7 +164,7 @@ class StoreClient(SRPCClient):
         return self.parse(rep)
 
     def publish(self, topic:SRPCTopic, value:str):
-        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic, 'value':value}, close = False)
+        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic.topic, 'value':value}, close = False)
         return self.parse(rep)
 
 def store_service(host, port, name = 'store'):

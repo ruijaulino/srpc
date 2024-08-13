@@ -71,12 +71,13 @@ class SRPCTopic:
     def __init__(self, *args):
         self.sep = '.'
         self.parts = []
-        for e in [str(a) for a in args]: self.parts += [self._fix_str(b) for b in e.split(self.sep)]
+        for e in [str(a) for a in args]: self.parts += [self._fix_str(str(b)) for b in e.split(self.sep)]
         self.topic = '.'.join(self.parts)
 
     def _fix_str(self, s:str):
         s = s.lower() # in lower case
         s = s.replace(' ','_') # replace spaces otherwise it will mess the topics
+        s = s.replace('/','_')
         return s
     
     def __str__(self):
@@ -156,7 +157,7 @@ class SocketSub:
             self.socket.setsockopt_string(zmq.UNSUBSCRIBE, topic.topic)
             self._delete_topic(topic = topic)    
 
-    def subscribe(self, topic:SRPCTopic, unsubscribe = True):
+    def subscribe(self, topic:SRPCTopic, unsubscribe:bool = True):
         if isinstance(topic, str):
             topic = SRPCTopic(topic)
         if self.connected and not self._is_subscribed(topic):
@@ -164,6 +165,9 @@ class SocketSub:
                 self.unsubscribe(topic = topic)
             self.topics.append(topic)
             self.socket.setsockopt_string(zmq.SUBSCRIBE, topic.topic)
+        # make a sleep in sub to make sure all messages pass in case of many subs
+        time.sleep(1)
+
     
     def recv(self):
         if len(self.topics)==0: return None,None
