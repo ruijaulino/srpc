@@ -3,4 +3,5 @@ from .registry import SRPCRegistry
 from .server import SRPCServer
 from .client import SRPCClient
 from .store import Store,StoreClient
+from .triggers import Triggers,TriggersClient
 from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen

@@ -165,9 +165,6 @@ class SocketSub:
                 self.unsubscribe(topic = topic)
             self.topics.append(topic)
             self.socket.setsockopt_string(zmq.SUBSCRIBE, topic.topic)
-        # make a sleep in sub to make sure all messages pass in case of many subs
-        time.sleep(1)
-
     
     def recv(self):
         if len(self.topics)==0: return None,None
