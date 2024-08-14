@@ -87,6 +87,7 @@ class SRPCServer:
         self.class_instances[name] = cls()
 
     def publish(self, topic:SRPCTopic, value:str):
+        # add lock here in case many workers try to publish
         if not self.stop_event.isSet(): 
             s = self.pub_queue.put([topic, value])
             if s == 1: print('Warning: pub queue is full.')
@@ -163,17 +164,9 @@ class SRPCServer:
             if tmp is not None:
                 self.pub_socket.publish(tmp[0], tmp[1])
 
-    def srpc_serve(self):
-        if self.clear_screen: 
-            clear_screen()
-            self.clear_screen = False
+    def base_worker(self):
+        # base worker should create its socket
 
-        print(f"Server {self.name} running")
-        reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
-        reg_th.start()
-        pub_th = threading.Thread(target = self.publisher, daemon = True)
-        pub_th.start()        
-        
         while True:
             try:
                 req = self.socket.recv()
@@ -192,7 +185,22 @@ class SRPCServer:
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
                         self.socket.send(rep)
             except KeyboardInterrupt:
-                break
+                break        
+
+    def srpc_serve(self):
+        if self.clear_screen: 
+            clear_screen()
+            self.clear_screen = False
+
+        print(f"Server {self.name} running")
+        reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
+        reg_th.start()
+        pub_th = threading.Thread(target = self.publisher, daemon = True)
+        pub_th.start()        
+        
+        # replicate this across many workers in many threads
+        self.base_worker()
+
         self.stop_event.set()
         print(f'Server {self.name} joining threads')
         reg_th.join()
