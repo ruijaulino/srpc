@@ -185,14 +185,18 @@ class SocketReqRep:
     Wrapper over ZMQ REP/REQ Socket.
     """
     
-    def __init__(self, host:str, port:int, zmq_type:str, bind:bool, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60):
+    def __init__(self, host:str = '', port:int = 5000, zmq_type:str = 'REP', bind:bool = True, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, addr:str = None, shared_context:bool = False):
         """
         Initialize the ZMQRSocket.
         """
         self.host = host
         self.port = port
         # build address
-        self.addr = f"tcp://{host}:{port}"    
+        if addr is not None:
+            self.addr = addr
+        else:
+            self.addr = f"tcp://{host}:{port}"    
+        self.shared_context = shared_context
         # replace localhost
         self.addr = self.addr.replace('localhost','127.0.0.1')
         assert zmq_type in ['REP','REQ'], f"Unknown zmq_type {zmq_type}. Use REP or REP"
@@ -211,7 +215,7 @@ class SocketReqRep:
         self.last_connect = time.time()
         if self.connected:
             self.close()
-        self.context = zmq.Context()
+        self.context = zmq.Context.instance() if self.shared_context else zmq.Context()
         self.socket = self.context.socket(self.zmq_type)
         if self.bind:
             self.socket.bind(self.addr)        
@@ -228,8 +232,11 @@ class SocketReqRep:
         """
         Close the ZMQ socket and terminate the context.
         """
-        self.socket.close()
-        self.context.term()
+        try:
+            self.socket.close()
+            self.context.term()
+        except Exception as e:
+            print('Error in close: ', e)
         self.connected = False
 
     def recv(self) -> any:
@@ -245,6 +252,8 @@ class SocketReqRep:
             if self.zmq_type == zmq.REQ:
                 self.close()
                 self.connect()
+        except Exception as e:
+            print('Error in recv: ', e)
         return msg
 
     def send(self, msg:str) -> int:
@@ -265,6 +274,8 @@ class SocketReqRep:
             if self.zmq_type == zmq.REP:
                 self.close()
                 self.connect()        
+        except Exception as e:
+            print('Error in recv: ', e)
         return status
 
 

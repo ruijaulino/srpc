@@ -23,11 +23,26 @@ def build_server_response(status:str, output, error_msg:str):
     return {'status':status, 'output':output, 'error_msg':error_msg}
 
 class SRPCServer:
-    def __init__(self, name:str, host:str, port:int, pub_port:int = None, recvtimeo:int = 1000, sndtimeo:int = 1000, reconnect:int = 60*60, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, queue_size:int = 2048, cs = True):
+    def __init__(
+                self, 
+                name:str, 
+                host:str, 
+                port:int, 
+                pub_port:int = None, 
+                recvtimeo:int = 1000, 
+                sndtimeo:int = 1000, 
+                reconnect:int = 60*60, 
+                registry_host:str = REGISTRY_HOST, 
+                registry_port:int = REGISTRY_PORT, 
+                queue_size:int = 2048, 
+                n_workers:int = 1, 
+                thread_safe:bool = True, 
+                clear_screen:bool = True
+                ):
         self.name = name
         self.srpc_host = host
         self.srpc_port = port
-        self.cs = cs
+        self.clear_screen = clear_screen
         self.srpc_pub_port = pub_port if pub_port is not None else port+1
 
         self.socket = SocketReqRep(
@@ -126,7 +141,6 @@ class SRPCServer:
     def registry_heartbeat(self):
         while not self.stop_event.isSet(): 
             try:
-                # print('send heartbeat ', self.name, f"tcp://{self.srpc_host}:{self.srpc_port}")
                 req = {
                     "action": "heartbeat",
                     "info": {
@@ -150,9 +164,9 @@ class SRPCServer:
                 self.pub_socket.publish(tmp[0], tmp[1])
 
     def srpc_serve(self):
-        if self.cs: 
+        if self.clear_screen: 
             clear_screen()
-            self.cs = False
+            self.clear_screen = False
 
         print(f"Server {self.name} running")
         reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
@@ -188,9 +202,9 @@ class SRPCServer:
     # call start and then serve
     # make it easier to dev services
     def serve(self):
-        if self.cs: 
+        if self.clear_screen: 
             clear_screen()
-            self.cs = False        
+            self.clear_screen = False        
         if hasattr(self, 'start'):
             print(f"Server {self.name} initializing")
             self.start()
