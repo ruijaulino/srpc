@@ -80,8 +80,8 @@ class SRPCServer:
                                     port = registry_port, 
                                     zmq_type = 'REQ', 
                                     bind = False, 
-                                    recvtimeo = recvtimeo, 
-                                    sndtimeo = sndtimeo, 
+                                    recvtimeo = 1000, 
+                                    sndtimeo = 1000, 
                                     reconnect = reconnect
                                     )   
 
@@ -161,8 +161,6 @@ class SRPCServer:
         self.pub_queue = None
         print(f"Server {self.name} closed")
 
-    def close(self):
-        self.srpc_close()
 
     def registry_heartbeat(self):
         while not self.stop_event.isSet(): 
@@ -178,7 +176,12 @@ class SRPCServer:
                 status = self.registry_socket.send(json.dumps(req))
                 if status == 1:
                     rep = self.registry_socket.recv()
-                time.sleep(REGISTRY_HEARTBEAT)
+                # make it exit faster
+                s = time.time()
+                while time.time() - s < REGISTRY_HEARTBEAT:
+                    time.sleep(0.5)
+                    if self.stop_event.isSet():
+                        return
             except:
                 print('Error in registry_heartbeat')
                 pass
@@ -267,8 +270,8 @@ class SRPCServer:
                 time.sleep(0.1)
                 pass
             except KeyboardInterrupt:
-                self.stop_event.set()
                 break
+        self.stop_event.set()
         print(f'Server {self.name} stopping proxy')                
         proxy.stop()
         print(f'Server {self.name} joining workers')
@@ -290,6 +293,10 @@ class SRPCServer:
             print(f"Server {self.name} initializing")
             self.start()
         self.srpc_serve()
+
+    # override this if you want
+    def close(self):
+        self.srpc_close()
 
     def start(self):
         '''
