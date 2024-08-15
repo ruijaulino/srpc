@@ -45,7 +45,7 @@ class SRPCServer:
                 registry_port:int = REGISTRY_PORT, 
                 queue_size:int = 2048, 
                 n_workers:int = 1, 
-                thread_safe:bool = True, 
+                thread_safe:bool = False, 
                 clear_screen:bool = True
                 ):
         self.name = name
@@ -271,11 +271,13 @@ class SRPCServer:
                 break
         print(f'Server {self.name} stopping proxy')                
         proxy.stop()
-        print(f'Server {self.name} joining threads')
+        print(f'Server {self.name} joining workers')
         for worker in workers:
             worker.join()
-        reg_th.join()
+        print(f'Server {self.name} joining publisher')
         pub_th.join()
+        print(f'Server {self.name} joining registry')
+        reg_th.join()
         self.close()
 
     # call start and then serve
