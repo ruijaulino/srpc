@@ -1,23 +1,32 @@
 import zmq
 import json
 import time
+import threading
+import random
+import string
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper
+    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper
+    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
 try:
     from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 except ImportError:
     from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
-import threading
-
 
 # function to build a response from the server
 # easier to check how the server responds
 
 OK_STATUS = 'ok'
 ERROR_STATUS = 'error'
+
+
+def generate_random_string(n):
+    # Define the character set: lowercase, uppercase letters, digits
+    characters = string.ascii_letters + string.digits
+    # Generate a random string
+    random_string = ''.join(random.choice(characters) for _ in range(n))
+    return random_string
 
 def build_server_response(status:str, output, error_msg:str):
     return {'status':status, 'output':output, 'error_msg':error_msg}
@@ -42,19 +51,28 @@ class SRPCServer:
         self.name = name
         self.srpc_host = host
         self.srpc_port = port
-        self.clear_screen = clear_screen
         self.srpc_pub_port = pub_port if pub_port is not None else port+1
+        self.srpc_recvtimeo = recvtimeo
+        self.srpc_sndtimeo = sndtimeo
+        self.srpc_reconnect = reconnect
 
-        self.socket = SocketReqRep(
-                                    host = self.srpc_host, 
-                                    port = self.srpc_port, 
-                                    zmq_type = 'REP', 
-                                    bind = True, 
-                                    recvtimeo = recvtimeo, 
-                                    sndtimeo = sndtimeo, 
-                                    reconnect = reconnect
-                                    )
+        self.clear_screen = clear_screen
+        self.socket = None        
         
+
+
+#        self.socket = SocketReqRep(
+#                                    host = self.srpc_host, 
+#                                    port = self.srpc_port, 
+#                                    zmq_type = 'REP', 
+#                                    bind = True, 
+#                                    recvtimeo = recvtimeo, 
+#                                    sndtimeo = sndtimeo, 
+#                                    reconnect = reconnect
+#                                    )
+
+
+
         self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port)
 
         self.registry_socket = SocketReqRep(
@@ -71,9 +89,16 @@ class SRPCServer:
         self.classes = {}
         self.class_instances = {}        
         self.last_heartbeat = time.time()
-        self.stop_event = threading.Event()
+        self.stop_event = threading.Event() 
         self.pub_queue = QueueWrapper(4*4096)
-
+        self.publish_lock = threading.Lock()
+        self.stop_sockets_lock = threading.Lock()
+        self.thread_safe_lock = threading.Lock()
+        self.workers_lock = threading.Lock()
+        self.thread_safe = thread_safe
+        # build workers addr
+        self.worker_addr = "inproc://"+generate_random_string(8)
+        self.n_workers = n_workers
 
     def register_function(self, func, name=None):
         if name is None:
@@ -87,13 +112,13 @@ class SRPCServer:
         self.class_instances[name] = cls()
 
     def publish(self, topic:SRPCTopic, value:str):
-        # add lock here in case many workers try to publish
-        if not self.stop_event.isSet(): 
-            s = self.pub_queue.put([topic, value])
-            if s == 1: print('Warning: pub queue is full.')
-            return 1
-        else:
-            return 0
+        with self.publish_lock:
+            if not self.stop_event.isSet(): 
+                s = self.pub_queue.put([topic, value])
+                if s == 1: print('Warning: pub queue is full.')
+                return 1
+            else:
+                return 0
 
     def handle_request(self, request):
         method = request.get("method")
@@ -129,7 +154,7 @@ class SRPCServer:
         return rep
 
     def srpc_close(self):
-        self.socket.close()
+        # self.socket.close()
         self.registry_socket.close()
         self.pub_socket.close()
         self.pub_queue.close() 
@@ -167,42 +192,88 @@ class SRPCServer:
     def base_worker(self):
         # base worker should create its socket
 
-        while True:
+        worker_socket = SocketReqRep(
+                                    zmq_type = 'REP', 
+                                    bind = False, 
+                                    recvtimeo = self.srpc_recvtimeo, 
+                                    sndtimeo = self.srpc_sndtimeo, 
+                                    reconnect = self.srpc_reconnect,
+                                    addr = self.worker_addr,
+                                    shared_context = True
+                                    )
+        
+        while not self.stop_event.isSet():            
             try:
-                req = self.socket.recv()
-                if req is not None:                
+                req = worker_socket.recv()
+                if req is not None:            
                     try:
                         # req to json
-                        req = json.loads(req)
-                        rep = self.handle_request(req)
+                        req = json.loads(req)                        
+                        if self.thread_safe:
+                            with self.thread_safe_lock:
+                                rep = self.handle_request(req)    
+                        else:
+                            rep = self.handle_request(req)
                         rep = json.dumps(rep)
-                        self.socket.send(rep)
+                        worker_socket.send(rep)
                     except json.JSONDecodeError:
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = 'Invalid json')     
-                        self.socket.send(rep)
+                        worker_socket.send(rep)
                     except Exception as e:
                         print('SRPCServer error: ', e)
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
-                        self.socket.send(rep)
-            except KeyboardInterrupt:
+                        worker_socket.send(rep)
+            except Exception as e:
+                print('Error in base_worker: ', e)
                 break        
+        # do not terminate the context as it is shared
+        worker_socket.close(False)
 
+    @property
+    def client_addr(self):
+        addr = f"tcp://{self.srpc_host}:{self.srpc_port}"    
+        addr = addr.replace('localhost','127.0.0.1')
+        return addr
+    
     def srpc_serve(self):
         if self.clear_screen: 
             clear_screen()
             self.clear_screen = False
 
         print(f"Server {self.name} running")
+        
+        # start registry communications
         reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
         reg_th.start()
-        pub_th = threading.Thread(target = self.publisher, daemon = True)
-        pub_th.start()        
         
-        # replicate this across many workers in many threads
-        self.base_worker()
+        # start publisher
+        pub_th = threading.Thread(target = self.publisher, daemon = True)
+        pub_th.start()                     
+        
+        # start proxy
+        proxy = Proxy(self.worker_addr, self.client_addr)
+        proxy.start()         
 
-        self.stop_event.set()
+        # start workers
+
+        workers = []
+        for _ in range(self.n_workers): # Number of worker threads
+            thread = threading.Thread(target=self.base_worker)
+            thread.start()
+            workers.append(thread)
+
+        while True:
+            try:
+                time.sleep(0.1)
+                pass
+            except KeyboardInterrupt:
+                self.stop_event.set()
+                break
+        print(f'Server {self.name} stopping proxy')                
+        proxy.stop()
         print(f'Server {self.name} joining threads')
+        for worker in workers:
+            worker.join()
         reg_th.join()
         pub_th.join()
         self.close()
@@ -224,9 +295,8 @@ class SRPCServer:
         '''
         pass
 
-if __name__ == "__main__":
 
-
+def test_server():
     def add(a, b):
         return a + b
 
@@ -242,9 +312,17 @@ if __name__ == "__main__":
                 return "Cannot divide by zero"
             return a / b
 
-    server = SRPCServer(name = 'test_server', host = "localhost", port = 5557)
+    server = SRPCServer(name = 'test_server', host = "localhost", port = 5557, clear_screen = False, n_workers = 5, thread_safe = True)
     server.register_function(add)
     server.register_function(subtract)
     server.register_class(ExampleClass)  
 
     server.serve()
+
+
+
+
+if __name__ == "__main__":
+
+    test_server()
+

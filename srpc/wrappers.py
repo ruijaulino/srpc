@@ -228,15 +228,18 @@ class SocketReqRep:
         self.socket.setsockopt(zmq.LINGER, 0)
         self.connected = True
 
-    def close(self) -> None:
+    def close(self, ctx_term:bool = True) -> None:
         """
         Close the ZMQ socket and terminate the context.
         """
         try:
             self.socket.close()
-            self.context.term()
+            if ctx_term:
+                self.context.term()
+
         except Exception as e:
-            print('Error in close: ', e)
+            pass
+            # print('Error in close: ', e)
         self.connected = False
 
     def recv(self) -> any:
@@ -253,7 +256,8 @@ class SocketReqRep:
                 self.close()
                 self.connect()
         except Exception as e:
-            print('Error in recv: ', e)
+            pass
+            # print('Error in recv: ', e)
         return msg
 
     def send(self, msg:str) -> int:
@@ -275,8 +279,50 @@ class SocketReqRep:
                 self.close()
                 self.connect()        
         except Exception as e:
-            print('Error in recv: ', e)
+            pass
+            # print('Error in recv: ', e)
         return status
+
+
+class Proxy:
+    def __init__(self, worker_addr:str, client_addr:str):
+        self.worker_addr = worker_addr
+        self.client_addr = client_addr
+
+        # context must be shared
+        self.context = zmq.Context.instance() 
+        
+        # Socket to send messages to workers
+        self.backend = self.context.socket(zmq.DEALER)
+        self.backend.setsockopt(zmq.LINGER, 0)
+        self.backend.bind(self.worker_addr)
+        
+        # Socket to receive messages from clients
+        self.frontend = self.context.socket(zmq.ROUTER)
+        self.frontend.setsockopt(zmq.LINGER, 0)
+        self.frontend.bind(self.client_addr)
+
+    # run the proxy
+    def _proxy(self):
+        try:
+            zmq.proxy(self.frontend, self.backend)
+        except zmq.error.ZMQError as e:
+            pass
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+
+    def stop(self):
+        # closing the sockets will trigger an error inside the thread
+        # stopping the proxy
+        self.frontend.close()
+        self.backend.close()
+        self.context.term()    
+        self.th.join()
+
+    def start(self):
+        # Start the proxy in a separate thread
+        self.th = threading.Thread(target=self._proxy)
+        self.th.start()
 
 
 if __name__ == '__main__':
