@@ -46,7 +46,8 @@ class SRPCServer:
                 queue_size:int = 2048, 
                 n_workers:int = 1, 
                 thread_safe:bool = False, 
-                clear_screen:bool = True
+                clear_screen:bool = True,
+                worker_info:bool = False
                 ):
         self.name = name
         self.srpc_host = host
@@ -56,23 +57,10 @@ class SRPCServer:
         self.srpc_sndtimeo = sndtimeo
         self.srpc_reconnect = reconnect
 
+        self.worker_info = worker_info
         self.clear_screen = clear_screen
         self.socket = None        
         
-
-
-#        self.socket = SocketReqRep(
-#                                    host = self.srpc_host, 
-#                                    port = self.srpc_port, 
-#                                    zmq_type = 'REP', 
-#                                    bind = True, 
-#                                    recvtimeo = recvtimeo, 
-#                                    sndtimeo = sndtimeo, 
-#                                    reconnect = reconnect
-#                                    )
-
-
-
         self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port)
 
         self.registry_socket = SocketReqRep(
@@ -195,6 +183,8 @@ class SRPCServer:
     def base_worker(self):
         # base worker should create its socket
 
+        worker_name = "worker_" + generate_random_string(5)
+
         worker_socket = SocketReqRep(
                                     zmq_type = 'REP', 
                                     bind = False, 
@@ -209,6 +199,7 @@ class SRPCServer:
             try:
                 req = worker_socket.recv()
                 if req is not None:            
+                    if self.worker_info: print('Request on ', worker_name)
                     try:
                         # req to json
                         req = json.loads(req)                        
