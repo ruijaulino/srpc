@@ -19,11 +19,13 @@ class StreamerServerExample(SRPCServer):
             time.sleep(0.5)
 
     # as an example, override the close
+    # this is called when the code is shutdown by the user
     def close(self):
         self.srpc_close()
         self.th.join()
         print('Done overriden close')
 
+    # this is called when we call the method .serve()
     def start(self):
         self.th = threading.Thread(target = self.stream, daemon = True)
         self.th.start()
@@ -37,6 +39,8 @@ class StreamerServerExample(SRPCServer):
 def test_server(host, port):
     server = StreamerServerExample(service_name = 'stream_example', host = host, port = port, pub_port = port+1)  
     server.serve()    
+
+
 
 if __name__ == '__main__':
     host = 'localhost'

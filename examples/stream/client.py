@@ -8,12 +8,9 @@ class StreamerClientExample(SRPCClient):
     def __init__(self, host, port, sub_port = None):
         SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port)    
 
-    def parse(self, rep):
-        if rep.get('status') == "ok":
-            return rep.get('value')
-        else:
-            return rep.get('msg')
+    # there is a method .parse in SRPCClient that helps parse the response from SRPCServer's
 
+    # basically here we are wrapping aroung the methods in the StreamServer to make the API similar
     def set_m(self, m):
         rep = self.call(method = 'set_m', args = [], kwargs = {'m':m}, close = False)
         return self.parse(rep)
