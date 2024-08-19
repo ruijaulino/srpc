@@ -1,5 +1,6 @@
 import zmq
 import json
+import time
 
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
@@ -39,6 +40,18 @@ class SRPCClient:
     def listen(self):
         topic, msg = self.sub_socket.recv()
         return topic, msg
+
+    def listen_chunk(self, timeo:int = 1):
+        '''
+        be carefull using this because the sub recv can block longer than this timeo
+        '''
+        out = []
+        s = time.time()
+        while time.time() - s < timeo:
+            topic, msg = self.sub_socket.recv() 
+            if msg is not None:
+                out.append([topic, msg])
+        return out   
 
     def call(self, method, args = [], kwargs = {}, close = False):
         req = {
