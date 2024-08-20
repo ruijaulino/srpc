@@ -60,8 +60,11 @@ class SRPCServer:
         self.worker_info = worker_info
         self.clear_screen = clear_screen
         self.socket = None        
-        
-        self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port)
+
+        # create context        
+        self.context = zmq.Context.instance()
+
+        self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port, context = self.context)
 
         self.registry_socket = SocketReqRep(
                                     host = registry_host, 
@@ -70,7 +73,8 @@ class SRPCServer:
                                     bind = False, 
                                     recvtimeo = 1000, 
                                     sndtimeo = 1000, 
-                                    reconnect = reconnect
+                                    reconnect = reconnect,
+                                    context = self.context
                                     )   
 
         self.functions = {}
@@ -147,6 +151,7 @@ class SRPCServer:
         self.pub_socket.close()
         self.pub_queue.close() 
         self.pub_queue = None
+        self.context.term()
         print(f"Server {self.name} closed")
 
 
@@ -185,6 +190,8 @@ class SRPCServer:
 
         worker_name = "worker_" + generate_random_string(5)
 
+        print(f'Worker {worker_name} started')
+
         worker_socket = SocketReqRep(
                                     zmq_type = 'REP', 
                                     bind = False, 
@@ -192,7 +199,8 @@ class SRPCServer:
                                     sndtimeo = self.srpc_sndtimeo, 
                                     reconnect = self.srpc_reconnect,
                                     addr = self.worker_addr,
-                                    shared_context = True
+                                    shared_context = True,
+                                    context = self.context
                                     )
         
         while not self.stop_event.isSet():            
@@ -222,6 +230,7 @@ class SRPCServer:
                 break        
         # do not terminate the context as it is shared
         worker_socket.close(False)
+        print(f'Worker {worker_name} closed')
 
     @property
     def client_addr(self):
@@ -245,7 +254,7 @@ class SRPCServer:
         pub_th.start()                     
         
         # start proxy
-        proxy = Proxy(self.worker_addr, self.client_addr)
+        proxy = Proxy(self.worker_addr, self.client_addr, context = self.context)
         proxy.start()         
 
         # start workers

@@ -84,15 +84,20 @@ class SRPCTopic:
         return self.topic
 
 class SocketPub:
-    def __init__(self, host:str, port:int):
+    def __init__(self, host:str, port:int, context:zmq.Context = None):
 
         self.host = host
         self.port = port
         # build address
         self.addr = f"tcp://{host}:{port}"    
         # replace localhost
-        self.addr = self.addr.replace('localhost','127.0.0.1')
-        self.context = zmq.Context()
+        self.addr = self.addr.replace('localhost','127.0.0.1')         
+        self.term_ctx = True
+        if context:
+            self.term_ctx = False
+            self.context = context
+        else:
+            self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUB)
         self.socket.bind(self.addr)
         self.connected = True
@@ -110,12 +115,12 @@ class SocketPub:
     def close(self):
         if self.connected:
             self.socket.close()
-            self.context.term()
+            if self.term_ctx: self.context.term()
             self.connected = False
 
 
 class SocketSub:
-    def __init__(self, host:str, port:int, recvtimeo:int = 100, last_msg_only:bool = True):
+    def __init__(self, host:str, port:int, recvtimeo:int = 100, last_msg_only:bool = True, context:zmq.Context = None):
         
         self.host = host
         self.port = port
@@ -125,7 +130,12 @@ class SocketSub:
         self.addr = self.addr.replace('localhost','127.0.0.1')
         self.recvtimeo = recvtimeo
         self.conflate = 1 if last_msg_only else 0
-        self.context = zmq.Context()
+        self.term_ctx = True
+        if context:
+            self.term_ctx = False
+            self.context = context
+        else:
+            self.context = zmq.Context()
         self.socket = self.context.socket(zmq.SUB)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
@@ -178,14 +188,14 @@ class SocketSub:
     def close(self):
         self.connected = False
         self.socket.close()
-        self.context.term()
+        if self.term_ctx: self.context.term()
 
 class SocketReqRep:
     """
     Wrapper over ZMQ REP/REQ Socket.
     """
     
-    def __init__(self, host:str = '', port:int = 5000, zmq_type:str = 'REP', bind:bool = True, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, addr:str = None, shared_context:bool = False):
+    def __init__(self, host:str = '', port:int = 5000, zmq_type:str = 'REP', bind:bool = True, recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, addr:str = None, shared_context:bool = False, context:zmq.Context = None):
         """
         Initialize the ZMQRSocket.
         """
@@ -206,6 +216,12 @@ class SocketReqRep:
         self.reconnect = reconnect
         self.connected = False
         self.bind = bind
+        self.term_ctx = True
+        if context:
+            self.term_ctx = False
+            self.context = context
+        else:
+            self.context = zmq.Context.instance() if self.shared_context else zmq.Context()
         self.connect()
 
     def connect(self) -> None:
@@ -215,7 +231,7 @@ class SocketReqRep:
         self.last_connect = time.time()
         if self.connected:
             self.close()
-        self.context = zmq.Context.instance() if self.shared_context else zmq.Context()
+        # self.context = zmq.Context.instance() if self.shared_context else zmq.Context()
         self.socket = self.context.socket(self.zmq_type)
         if self.bind:
             self.socket.bind(self.addr)        
@@ -234,12 +250,13 @@ class SocketReqRep:
         """
         try:
             self.socket.close()
-            if ctx_term:
-                self.context.term()
+            if self.term_ctx: self.context.term()
+            # if ctx_term:
+            #     self.context.term()
 
         except Exception as e:
-            pass
-            # print('Error in close: ', e)
+            # pass
+            print('Error in close: ', e)
         self.connected = False
 
     def recv(self) -> any:
@@ -284,7 +301,7 @@ class SocketReqRep:
         return status
 
 
-class Proxy:
+class oldProxy:
     def __init__(self, worker_addr:str, client_addr:str):
         self.worker_addr = worker_addr
         self.client_addr = client_addr
@@ -307,9 +324,10 @@ class Proxy:
         try:
             zmq.proxy(self.frontend, self.backend)
         except zmq.error.ZMQError as e:
-            pass
+            print(f"ZMQError in proxy: {e}")
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            print(f"Unexpected error in proxy: {e}")
+        print('Proxy thread terminated')
 
     def stop(self):
         # closing the sockets will trigger an error inside the thread
@@ -324,6 +342,83 @@ class Proxy:
         self.th = threading.Thread(target=self._proxy)
         self.th.start()
 
+
+class Proxy:
+    def __init__(self, worker_addr:str, client_addr:str, context:zmq.Context = None):
+        self.worker_addr = worker_addr
+        self.client_addr = client_addr
+        
+        self.proxy_stop_even = threading.Event()
+
+        self.polltimeo = 100
+
+        self.term_ctx = True
+        if context:
+            self.term_ctx = False
+            self.context = context
+        else:
+            self.context = zmq.Context.instance()        
+
+    # run the proxy
+    def _proxy(self):   
+        # context = zmq.Context.instance() 
+
+        frontend = self.context.socket(zmq.ROUTER)
+        backend = self.context.socket(zmq.DEALER)
+
+        frontend.bind(self.client_addr)
+        backend.bind(self.worker_addr)
+
+        frontend.setsockopt(zmq.RCVTIMEO, 1000)
+        frontend.setsockopt(zmq.SNDTIMEO, 1000)
+        frontend.setsockopt(zmq.LINGER, 0)
+
+        backend.setsockopt(zmq.RCVTIMEO, 1000)
+        backend.setsockopt(zmq.SNDTIMEO, 1000)
+        backend.setsockopt(zmq.LINGER, 0)
+
+        poller = zmq.Poller()
+        poller.register(frontend, zmq.POLLIN)
+        poller.register(backend, zmq.POLLIN)
+
+        while not self.proxy_stop_even.isSet():
+            try:
+                if frontend.closed:
+                    print('proxy frontend is closed!')
+                    break
+                if backend.closed:
+                    print('proxy backend is closed!')
+                    break
+                socks = dict(poller.poll(self.polltimeo))
+                if socks.get(frontend) == zmq.POLLIN:
+                    message = frontend.recv_multipart()
+                    backend.send_multipart(message)
+                
+                if socks.get(backend) == zmq.POLLIN:
+                    message = backend.recv_multipart()
+                    frontend.send_multipart(message)
+                # frontend.close()
+            except Exception as e:
+                print('proxy thread error : ', e)
+                
+        print('closing proxy')
+        frontend.close()
+        backend.close()
+        if self.term_ctx: 
+            self.context.term()
+        print('proxy closed')
+
+
+    def stop(self):
+        # closing the sockets will trigger an error inside the thread
+        # stopping the proxy
+        self.proxy_stop_even.set()
+        self.th.join()
+
+    def start(self):
+        # Start the proxy in a separate thread
+        self.th = threading.Thread(target=self._proxy)
+        self.th.start()  
 
 if __name__ == '__main__':
     topic = SRPCTopic('ib','ESU4 Index')
