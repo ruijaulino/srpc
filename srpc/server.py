@@ -7,19 +7,20 @@ import string
 
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
+    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
 except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
+    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
 try:
-    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
+    from .defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 except ImportError:
-    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
+    from defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
 
 # function to build a response from the server
 # easier to check how the server responds
 
 OK_STATUS = 'ok'
 ERROR_STATUS = 'error'
-
 
 def generate_random_string(n):
     # Define the character set: lowercase, uppercase letters, digits
@@ -35,82 +36,90 @@ class SRPCServer:
     def __init__(
                 self, 
                 name:str, 
-                host:str, 
-                port:int, 
-                pub_port:int = None, 
-                recvtimeo:int = 1000, 
-                sndtimeo:int = 1000, 
-                reconnect:int = 60*60, 
-                registry_host:str = REGISTRY_HOST, 
-                registry_port:int = REGISTRY_PORT, 
-                queue_size:int = 2048, 
+                rep_addr:str,
+                pub_addr:str,
+                registry_addr:str = REGISTRY_ADDR,
+                timeo:int = 1, 
                 n_workers:int = 1, 
                 thread_safe:bool = False, 
+                lvc:bool = True,
                 clear_screen:bool = True,
-                worker_info:bool = False
                 ):
-        self.name = name
-        self.srpc_host = host
-        self.srpc_port = port
-        self.srpc_pub_port = pub_port if pub_port is not None else port+1
-        self.srpc_recvtimeo = recvtimeo
-        self.srpc_sndtimeo = sndtimeo
-        self.srpc_reconnect = reconnect
+        self._name = name
+        self._rep_addr = rep_addr
+        self._pub_addr = pub_addr
+        self._registry_addr = registry_addr
+        self._lvc = lvc
+        self._timeo = timeo
+        self._clear_screen = clear_screen
 
-        self.worker_info = worker_info
-        self.clear_screen = clear_screen
-        self.socket = None        
+        # create zmq context        
+        self.ctx = zmq.Context.instance()
+        self.stop_event = threading.Event()  
 
-        # create context        
-        self.context = zmq.Context.instance()
+        self._pub_socket = ZMQP(ctx = self.ctx, lvc = self._lvc, timeo = self._timeo)
+        self._pub_socket.bind(self._pub_addr)
 
-        self.pub_socket = SocketPub(host = self.srpc_host, port = self.srpc_pub_port, context = self.context)
+        self._registry_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
+        self._registry_socket.connect(self._registry_addr)
 
-        self.registry_socket = SocketReqRep(
-                                    host = registry_host, 
-                                    port = registry_port, 
-                                    zmq_type = 'REQ', 
-                                    bind = False, 
-                                    recvtimeo = 1000, 
-                                    sndtimeo = 1000, 
-                                    reconnect = reconnect,
-                                    context = self.context
-                                    )   
+        self._functions = {}
+        self._classes = {}
+        self._class_instances = {}        
+        
+        self._thread_safe_lock = threading.Lock()
+        self._thread_safe = thread_safe
+        self._n_workers = n_workers
 
-        self.functions = {}
-        self.classes = {}
-        self.class_instances = {}        
-        self.last_heartbeat = time.time()
-        self.stop_event = threading.Event() 
-        self.pub_queue = QueueWrapper(4*4096)
-        self.publish_lock = threading.Lock()
-        self.stop_sockets_lock = threading.Lock()
-        self.thread_safe_lock = threading.Lock()
-        self.workers_lock = threading.Lock()
-        self.thread_safe = thread_safe
+        self._workers = []
+        self._reg_th = None
+        self._req_queue = None
         # build workers addr
-        self.worker_addr = "inproc://"+generate_random_string(8)
-        self.n_workers = n_workers
+        self._worker_addr = "inproc://"+generate_random_string(8)
+
+    def registry_heartbeat(self):
+        while not self.stop_event.isSet(): 
+            try:
+                req = {
+                    "action": "heartbeat",
+                    "info": {
+                        "name": self._name,
+                        "rep_address": self._rep_addr,
+                        "pub_address": self._pub_addr
+                    }
+                }
+                status = self._registry_socket.send(json.dumps(req))
+                if status == 1:
+                    rep = self._registry_socket.recv()
+                # make it exit faster
+                s = time.time()
+                while time.time() - s < REGISTRY_HEARTBEAT:
+                    time.sleep(0.5)
+                    if self.stop_event.isSet():
+                        return
+            except Exception as e:
+                print('Error in registry_heartbeat: ', e)
+                pass
+
+    def publish(self, topic:str, msg:str):
+        if not isinstance(msg, str):
+            try:
+                msg = str(msg)
+            except:
+                print('could not cast msg to publish into string')    
+                msg = None
+        if msg: self._pub_socket.publish(topic = topic, msg = msg)
 
     def register_function(self, func, name=None):
         if name is None:
             name = func.__name__
-        self.functions[name] = func
+        self._functions[name] = func
 
     def register_class(self, cls, name=None):
         if name is None:
             name = cls.__name__
-        self.classes[name] = cls
-        self.class_instances[name] = cls()
-
-    def publish(self, topic:SRPCTopic, value:str):
-        with self.publish_lock:
-            if not self.stop_event.isSet(): 
-                s = self.pub_queue.put([topic, value])
-                if s == 1: print('Warning: pub queue is full.')
-                return 1
-            else:
-                return 0
+        self._classes[name] = cls
+        self._class_instances[name] = cls()
 
     def handle_request(self, request):
         method = request.get("method")
@@ -126,9 +135,9 @@ class SRPCServer:
             except Exception as e:
                 rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))
                 
-        elif method in self.functions:
+        elif method in self._functions:
             try:
-                out = self.functions[method](*args, **kwargs)
+                out = self._functions[method](*args, **kwargs)
                 rep = build_server_response(status = OK_STATUS, output = out, error_msg = '')
             except Exception as e:
                 rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))
@@ -136,174 +145,120 @@ class SRPCServer:
             rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = f"Unknown method: {method}")
             if "." in method:
                 class_name, method_name = method.split('.', 1)
-                if class_name in self.class_instances and hasattr(self.class_instances[class_name], method_name):
+                if class_name in self._class_instances and hasattr(self._class_instances[class_name], method_name):
                     try:
-                        method = getattr(self.class_instances[class_name], method_name)
+                        method = getattr(self._class_instances[class_name], method_name)
                         out = method(*args, **kwargs)
                         rep = build_server_response(status = OK_STATUS, output = out, error_msg = '')
                     except Exception as e:
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))      
         return rep
 
-    def srpc_close(self):
-        # self.socket.close()
-        self.registry_socket.close()
-        self.pub_socket.close()
-        self.pub_queue.close() 
-        self.pub_queue = None
-        self.context.term()
-        print(f"Server {self.name} closed")
-
-
-    def registry_heartbeat(self):
-        while not self.stop_event.isSet(): 
-            try:
-                req = {
-                    "action": "heartbeat",
-                    "info": {
-                        "name": self.name,
-                        "req_address": f"tcp://{self.srpc_host}:{self.srpc_port}",
-                        "pub_address": f"tcp://{self.srpc_host}:{self.srpc_pub_port}"
-                    }
-                }
-                status = self.registry_socket.send(json.dumps(req))
-                if status == 1:
-                    rep = self.registry_socket.recv()
-                # make it exit faster
-                s = time.time()
-                while time.time() - s < REGISTRY_HEARTBEAT:
-                    time.sleep(0.5)
-                    if self.stop_event.isSet():
-                        return
-            except:
-                print('Error in registry_heartbeat')
-                pass
-
-    def publisher(self):
-        while not self.stop_event.isSet(): 
-            tmp = self.pub_queue.get(PUBLISH_PERIOD)
-            if tmp is not None:
-                self.pub_socket.publish(tmp[0], tmp[1])
 
     def base_worker(self):
         # base worker should create its socket
 
-        worker_name = "worker_" + generate_random_string(5)
+        wid = "worker_" + generate_random_string(5)
+        # print(f'Worker {wid} started')
 
-        print(f'Worker {worker_name} started')
-
-        worker_socket = SocketReqRep(
-                                    zmq_type = 'REP', 
-                                    bind = False, 
-                                    recvtimeo = self.srpc_recvtimeo, 
-                                    sndtimeo = self.srpc_sndtimeo, 
-                                    reconnect = self.srpc_reconnect,
-                                    addr = self.worker_addr,
-                                    shared_context = True,
-                                    context = self.context
-                                    )
+        worker_socket = ZMQReliableQueueWorker(self.ctx)
+        worker_socket.connect(self._worker_addr)
         
         while not self.stop_event.isSet():            
             try:
-                req = worker_socket.recv()
+                clientid, req = worker_socket.recv_work()
                 if req is not None:            
-                    if self.worker_info: print('Request on ', worker_name)
+                    # if self.worker_info: print('Request on ', wid)
                     try:
                         # req to json
                         req = json.loads(req)                        
-                        if self.thread_safe:
-                            with self.thread_safe_lock:
+                        if self._thread_safe:
+                            with self._thread_safe_lock:
                                 rep = self.handle_request(req)    
                         else:
                             rep = self.handle_request(req)
                         rep = json.dumps(rep)
-                        worker_socket.send(rep)
+                        worker_socket.send_work(clientid, rep)
                     except json.JSONDecodeError:
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = 'Invalid json')     
-                        worker_socket.send(rep)
+                        worker_socket.send_work(clientid, rep)
                     except Exception as e:
                         print('SRPCServer error: ', e)
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
-                        worker_socket.send(rep)
+                        worker_socket.send_work(clientid, rep)
             except Exception as e:
                 print('Error in base_worker: ', e)
                 break        
         # do not terminate the context as it is shared
-        worker_socket.close(False)
-        print(f'Worker {worker_name} closed')
-
-    @property
-    def client_addr(self):
-        addr = f"tcp://{self.srpc_host}:{self.srpc_port}"    
-        addr = addr.replace('localhost','127.0.0.1')
-        return addr
+        worker_socket.close()
+        # print(f'Worker {wid} closed')
     
-    def srpc_serve(self):
-        if self.clear_screen: 
+    def _serve(self):
+        if self._clear_screen: 
             clear_screen()
-            self.clear_screen = False
+            self._clear_screen = False
 
-        print(f"Server {self.name} running")
+        print(f"Server {self._name} running")
         
         # start registry communications
-        reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
-        reg_th.start()
-        
-        # start publisher
-        pub_th = threading.Thread(target = self.publisher, daemon = True)
-        pub_th.start()                     
-        
-        # start proxy
-        proxy = Proxy(self.worker_addr, self.client_addr, context = self.context)
-        proxy.start()         
-
+        self._reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
+        self._reg_th.start()
+                
+        # start queue to distribute work
+        self._req_queue = ZMQReliableQueue(ctx = self.ctx, client_addr = self._rep_addr, worker_addr = self._worker_addr)
+        self._req_queue.start()
         # start workers
-
-        workers = []
-        for _ in range(self.n_workers): # Number of worker threads
+        self._workers = []
+        for _ in range(self._n_workers): # Number of worker threads
             thread = threading.Thread(target=self.base_worker)
             thread.start()
-            workers.append(thread)
+            self._workers.append(thread)
 
+        # keep server alive
         while True:
             try:
                 time.sleep(0.1)
                 pass
             except KeyboardInterrupt:
                 break
-        self.stop_event.set()
-        print(f'Server {self.name} stopping proxy')                
-        proxy.stop()
-        print(f'Server {self.name} joining workers')
-        for worker in workers:
-            worker.join()
-        print(f'Server {self.name} joining publisher')
-        pub_th.join()
-        print(f'Server {self.name} joining registry')
-        reg_th.join()
+
         self.close()
 
     # call start and then serve
     # make it easier to dev services
     def serve(self):
-        if self.clear_screen: 
+        if self._clear_screen: 
             clear_screen()
-            self.clear_screen = False        
+            self._clear_screen = False        
         if hasattr(self, 'start'):
-            print(f"Server {self.name} initializing")
+            print(f"Server {self._name} initializing")
             self.start()
-        self.srpc_serve()
+        self._serve()
+
+    def _close(self):
+        self.stop_event.set()
+        print(f'Server {self._name} joining workers')
+        for worker in self._workers:
+            worker.join()
+        print(f'Server {self._name} stopping request queue')        
+        self._req_queue.stop()
+        print(f'Server {self._name} joining registry')
+        self._reg_th.join()        
+        self._registry_socket.close()
+        self._pub_socket.close()
+        self.ctx.term()
+        print(f"Server {self._name} closed")
+
 
     # override this if you want
     def close(self):
-        self.srpc_close()
+        self._close()
 
     def start(self):
         '''
         override this method
         '''
         pass
-
 
 def test_server():
     def add(a, b):
@@ -321,13 +276,12 @@ def test_server():
                 return "Cannot divide by zero"
             return a / b
 
-    server = SRPCServer(name = 'test_server', host = "localhost", port = 5557, clear_screen = False, n_workers = 5, thread_safe = True)
+    server = SRPCServer(name = 'test_server', rep_addr = "tcp://127.0.0.1:5557", pub_addr = "tcp://127.0.0.1:5558", clear_screen = False, n_workers = 1, thread_safe = True)
     server.register_function(add)
     server.register_function(subtract)
     server.register_class(ExampleClass)  
 
     server.serve()
-
 
 
 

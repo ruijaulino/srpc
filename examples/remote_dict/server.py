@@ -1,5 +1,5 @@
 import srpc
 
 if __name__ == '__main__':
-    server = srpc.Store(service_name = 'store', host = 'localhost', port = 4005, pub_port = 4006)  
-    server.srpc_serve()
+    server = srpc.Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552")  
+    server.serve()

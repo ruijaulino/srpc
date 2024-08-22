@@ -2,7 +2,7 @@ import srpc
 
 if __name__ == '__main__':   
 
-    client = srpc.StoreClient("localhost", 4005)
+    client = srpc.StoreClient(req_addr = "tcp://127.0.0.1:5551", sub_addr = "tcp://127.0.0.1:5552")
     print(client.set('ola',1))
     print(client.get('ola'))
     print(client.get('ole'))
@@ -10,6 +10,5 @@ if __name__ == '__main__':
     print(client.delete('ola'))
     print(client.keys())
     print()
-    print(client.get('published'))
     client.close()
    

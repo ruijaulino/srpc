@@ -6,27 +6,21 @@ import datetime as dt
 import os
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, clear_screen
+    from .custom_zmq import ZMQR, ZMQP
 except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, clear_screen
+    from custom_zmq import ZMQR, ZMQP
 try:
-    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+    from .defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 except ImportError:
-    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
+    from defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT
 
 
 class SRPCRegistry:
-    def __init__(self, host:str = REGISTRY_HOST, port:int = REGISTRY_PORT, recvtimeo:int = 10000, sndtimeo:int = 100, reconnect:int = 60*60):
-        self.host = host
-        self.port = port
-        self.socket = SocketReqRep(
-                                    host = host, 
-                                    port = port, 
-                                    zmq_type = 'REP', 
-                                    bind = True, 
-                                    recvtimeo = recvtimeo, 
-                                    sndtimeo = sndtimeo, 
-                                    reconnect = reconnect
-                                    )
+    def __init__(self, ctx:zmq.Context, addr:str = REGISTRY_ADDR, timeo:int = 10):
+        self.addr = addr
+        self.socket = ZMQR(ctx = ctx, zmq_type = zmq.REP, timeo = timeo)
+        self.socket.connect(self.addr)
         self.services = {}
     
     def close(self):
@@ -51,7 +45,7 @@ class SRPCRegistry:
             try:
                 # show info
                 clear_screen()
-                print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self.host}:{self.port} ")
+                print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self.addr} ")
                 print()
                 for name, info in self.services.items():
                     print(f">> SERVICE {name} | ACCEPT REQ ON {info.get('req_address')} | PUB ON {info.get('pub_address')} | LAST INFO AT [{info.get('ts')}]")
@@ -88,5 +82,7 @@ class SRPCRegistry:
         self.close()      
 
 if __name__ == "__main__":
-    registry = SRPCRegistry()
+    ctx = zmq.Context()
+    registry = SRPCRegistry(ctx)
     registry.srpc_serve()
+    ctx.term()

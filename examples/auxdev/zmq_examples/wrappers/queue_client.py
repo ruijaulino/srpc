@@ -3,7 +3,7 @@ import sys
 import zmq
 import custom_zmq
 
-REQUEST_TIMEOUT = 2.5
+REQUEST_TIMEOUT = 10
 REQUEST_RETRIES = 3
 
 addr = "tcp://127.0.0.1:5555"

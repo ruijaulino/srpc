@@ -31,7 +31,7 @@ class Triggers(SRPCServer):
         self.pacing_th = 0.1 # must be larger than pacing
 
     def clocks(self):
-        # sent msgs
+        # send msgs
         pubs = []
         pubs_max_size = max(1, 2*len(self.minute_clocks_tz)*len(self.offsets))
         while not self.stop_event.isSet():                                    

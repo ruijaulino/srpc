@@ -4,54 +4,44 @@ import time
 
 try:
     from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
     from .server import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
 except ImportError:
     from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
+    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
     from server import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG
 
 
 class SRPCClient:
-    def __init__(self, host:str, port:int, sub_port:int = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, reconnect:int = 60*60, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
-        self.host = host
-        self.port = port
-        self.no_rep_msg = no_rep_msg
-        self.no_req_msg = no_req_msg
-        sub_port = sub_port if sub_port is not None else port+1
-        self.socket = SocketReqRep(
-                                    host = host, 
-                                    port = port, 
-                                    zmq_type = 'REQ', 
-                                    bind = False, 
-                                    recvtimeo = recvtimeo, 
-                                    sndtimeo = sndtimeo, 
-                                    reconnect = reconnect
-                                    )
-        self.sub_socket = SocketSub(host = host, port = sub_port, recvtimeo = sub_recvtimeo, last_msg_only = last_msg_only)
+    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
+        self._req_addr = req_addr
+        self._sub_addr = sub_addr
+        self._timeo = timeo
+        self._last_msg_only = last_msg_only
+        self._no_rep_msg = no_rep_msg
+        self._no_req_msg = no_req_msg
+        
+        self.ctx = zmq.Context.instance()
+        
+        self.req_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
+        self.req_socket.connect(self._req_addr)
+        
+        self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
+        self.sub_socket.connect(self._sub_addr)
 
     def close(self):
-        self.socket.close()
+        self.req_socket.close()
         self.sub_socket.close()
+        self.ctx.term()
 
-    def subscribe(self, topic:SRPCTopic, unsubscribe:bool = True):
-        self.sub_socket.subscribe(topic, unsubscribe)
+    def subscribe(self, topic:str):
+        self.sub_socket.subscribe(topic)
 
     def listen(self):
         topic, msg = self.sub_socket.recv()
         return topic, msg
-
-    def listen_chunk(self, timeo:int = 1):
-        '''
-        be carefull using this because the sub recv can block longer than this timeo
-        '''
-        out = []
-        s = time.time()
-        while time.time() - s < timeo:
-            topic, msg = self.sub_socket.recv() 
-            if msg is not None:
-                out.append([topic, msg])
-        return out   
 
     def call(self, method, args = [], kwargs = {}, close = False):
         req = {
@@ -61,17 +51,17 @@ class SRPCClient:
             }
         req = json.dumps(req)
         # Send the request
-        status = self.socket.send(req)
+        status = self.req_socket.send(req)
         if status == 1:
-            rep = self.socket.recv()
+            rep = self.req_socket.recv()
             if rep is not None:                
                 rep = json.loads(rep)
             else:
                 # this should emulate the response from the server
-                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
+                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self._no_rep_msg)
         else:
             # this should emulate the response from the server
-            rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_req_msg)
+            rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self._no_req_msg)
         if close: self.close()
         return rep
 
@@ -84,7 +74,7 @@ class SRPCClient:
             return rep.get('error_msg')
 
 def test_client():
-    client = SRPCClient(host = "localhost", port = 5557)
+    client = SRPCClient(req_addr = "tcp://127.0.0.1:5557", sub_addr = "tcp://127.0.0.1:5558")
     
     print(client.call("add", kwargs = {"a":1,"b":2}))  # Output: {'result': 3}
     print(client.call("subtract", [10, 43]))  # Output: {'result': -33}

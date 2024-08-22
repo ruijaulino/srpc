@@ -8,18 +8,31 @@ try:
     from .server import SRPCServer
     from .wrappers import SRPCTopic   
     from .client import SRPCClient
-    from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+    from .defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 except ImportError:
     from server import SRPCServer
     from wrappers import SRPCTopic
     from client import SRPCClient
-    from defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+    from defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 
 class Store(SRPCServer):
-    def __init__(self, service_name:str, host:str, port:int, pub_port:int = None, registry_host:str = REGISTRY_HOST, registry_port:int = REGISTRY_PORT, filename:str = 'store.pkl'):
-        SRPCServer.__init__(self, name = service_name, host = host, port = port, pub_port = pub_port, registry_host = registry_host, registry_port = registry_port)
+    def __init__(self, service_name:str, rep_addr:str, pub_addr:str, registry_addr:str = REGISTRY_ADDR, filename:str = 'store.pkl'):
+        
+        SRPCServer.__init__(
+                            self, 
+                            name = service_name, 
+                            rep_addr = rep_addr,
+                            pub_addr = pub_addr,
+                            registry_addr = registry_addr,
+                            timeo = 1, 
+                            n_workers = 1, 
+                            thread_safe = False, 
+                            lvc = True,
+                            clear_screen = True
+                            )
+
         self.filename = filename
         self.store = {}
         self.locks = {}
@@ -50,8 +63,7 @@ class Store(SRPCServer):
     def close(self):
         # write store to disk at close
         self.write_store()
-        self.srpc_close()
-
+        self._close()
 
     def _get_lock(self, key):
         with self.global_lock:
@@ -79,11 +91,6 @@ class Store(SRPCServer):
         if not isinstance(d, dict): return None
         key = keys[0]
         return Store.recursive_get(d.get(key, None), keys[1:])
-        #if key in d:
-        #    return recursive_get(d[key], keys[1:])
-        #else:
-        #    raise KeyError(f"Key '{key}' not found in dictionary")
-
 
     def get(self, *keys):
         with self.global_lock:
@@ -110,34 +117,9 @@ class Store(SRPCServer):
             if key in self.store:
                 del self.store[key]
     
-    # override publish method
-    def publish(self, topic:str, value:str, save:bool = True):
-        topic = SRPCTopic(topic)
-        if save:
-            tmp = self.get('published')
-            if tmp is None: tmp = {}
-            if isinstance(topic, str):  
-                tmp.update({topic:{'value':value, 'ts':dt.datetime.now().strftime('%Y-%m-%d %H:%M%S')}})
-            else:
-                tmp.update({topic.topic:{'value':value, 'ts':dt.datetime.now().strftime('%Y-%m-%d %H:%M%S')}})
-            self.set('published', tmp)
-        if not self.stop_event.isSet(): 
-            s = self.pub_queue.put([topic, value])
-            if s == 1: print('Warning: pub queue is full.')
-            return 1
-        else:
-            return 0
-
-
 class StoreClient(SRPCClient):
-    def __init__(self, host, port, sub_port = None, recvtimeo:int = 1000, sub_recvtimeo:int = 1000, sndtimeo:int = 100, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
-        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port, recvtimeo = 1000, sub_recvtimeo = 1000, sndtimeo = 100, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
-
-    #def parse(self, rep):
-    #    if rep.get('status') == "ok":
-    #        return rep.get('value')
-    #    else:
-    #        return rep.get('msg')
+    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):        
+        SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     def clear(self):
         rep = self.call(method = 'clear', args = [], kwargs = {}, close = False)
@@ -163,17 +145,17 @@ class StoreClient(SRPCClient):
         rep = self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
         return self.parse(rep)
 
-    def publish(self, topic:SRPCTopic, value:str):
-        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic.topic, 'value':value}, close = False)
+    def publish(self, topic:str, msg:str):
+        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
         return self.parse(rep)
 
-def store_service(host, port, name = 'store'):
-    server = Store(service_name = 'store', host = host, port = port)  
+def test_server():
+    server = Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552")  
     server.serve()
 
 def test_client():
    
-    client = StoreClient("localhost", 5550)
+    client = StoreClient(req_addr = "tcp://127.0.0.1:5551", sub_addr = "tcp://127.0.0.1:5552")
     print(client.clear())
     print(client.set('ola',1))
     print(client.get('ola'))
@@ -194,5 +176,5 @@ def test_client():
    
 
 if __name__ == "__main__":
-    # store_service("localhost", 5550)
+    # test_server()
     test_client()
