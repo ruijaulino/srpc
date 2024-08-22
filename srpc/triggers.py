@@ -91,9 +91,7 @@ class TriggersClient(SRPCClient):
                 return topic, msg
 
     def publish(self, topic:str, msg:str):
-        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
-        return self.parse(rep)
-
+        return self.invoque(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
 
 def test_server():
     server = Triggers(rep_addr = "tcp://127.0.0.1:6420", pub_addr = "tcp://127.0.0.1:6421", minute_clocks_tz = ['Europe/Lisbon', 'US/Eastern'], offsets = [5,10,20,30], service_name = 'Triggers')  

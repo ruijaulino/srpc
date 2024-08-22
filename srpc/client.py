@@ -71,6 +71,9 @@ class SRPCClient:
         else:
             return rep.get('error_msg')
 
+    def invoque(self, method, args = [], kwargs = {}, close = False):
+        return self.parse(self.call(method, args, kwargs, close))
+
 def test_client():
     client = SRPCClient(req_addr = "tcp://127.0.0.1:5557", sub_addr = "tcp://127.0.0.1:5558")
     

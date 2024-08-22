@@ -122,33 +122,26 @@ class StoreClient(SRPCClient):
         SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     def clear(self):
-        rep = self.call(method = 'clear', args = [], kwargs = {}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'clear', args = [], kwargs = {}, close = False)
 
     def delete(self, key):
-        rep = self.call(method = 'delete', args = [], kwargs = {'key':key}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'delete', args = [], kwargs = {'key':key}, close = False)
 
     def keys(self):
-        rep = self.call(method = 'keys', args = [], kwargs = {}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'keys', args = [], kwargs = {}, close = False)
 
     def sget(self, key, sub_key = None):
-        rep = self.call(method = 'sget', args = [], kwargs = {'key':key, 'sub_key': sub_key}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'sget', args = [], kwargs = {'key':key, 'sub_key': sub_key}, close = False)
 
     def get(self, *keys):
-        rep = self.call(method = 'get', args = keys, kwargs = {}, close = False)
-        return self.parse(rep)        
-
+        return self.invoque(method = 'get', args = keys, kwargs = {}, close = False)
+        
     def set(self, key, value):
-        rep = self.call(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
 
     def publish(self, topic:str, msg:str):
-        rep = self.call(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
-        return self.parse(rep)
-
+        return self.invoque(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
+        
 def test_server():
     server = Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552")  
     server.serve()
@@ -176,5 +169,5 @@ def test_client():
    
 
 if __name__ == "__main__":
-    test_server()
-    # test_client()
+    # test_server()
+    test_client()

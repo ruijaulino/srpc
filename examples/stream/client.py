@@ -10,12 +10,10 @@ class StreamerClientExample(SRPCClient):
         SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only)# , no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     def set_m(self, m):
-        rep = self.call(method = 'set_m', args = [], kwargs = {'m':m}, close = False)
-        return self.parse(rep)
+        return self.invoque(method = 'set_m', args = [], kwargs = {'m':m}, close = False)
 
     def set_s(self, s):
-        rep = self.call(method = 'set_s', args = [], kwargs = {'s':s}, close = False)
-        return self.parse(rep)        
+        return self.invoque(method = 'set_s', args = [], kwargs = {'s':s}, close = False)
 
 
 if __name__ == '__main__':
