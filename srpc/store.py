@@ -6,19 +6,19 @@ import os
 import datetime as dt
 try:
     from .server import SRPCServer
-    from .wrappers import SRPCTopic   
+    from .utils import SRPCTopic   
     from .client import SRPCClient
-    from .defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+    from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 except ImportError:
     from server import SRPCServer
-    from wrappers import SRPCTopic
+    from utils import SRPCTopic
     from client import SRPCClient
-    from defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+    from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 
 class Store(SRPCServer):
-    def __init__(self, service_name:str, rep_addr:str, pub_addr:str, registry_addr:str = REGISTRY_ADDR, filename:str = 'store.pkl'):
+    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = REGISTRY_ADDR, service_name:str = "Store", filename:str = 'store.pkl'):
         
         SRPCServer.__init__(
                             self, 
@@ -176,5 +176,5 @@ def test_client():
    
 
 if __name__ == "__main__":
-    # test_server()
-    test_client()
+    test_server()
+    # test_client()

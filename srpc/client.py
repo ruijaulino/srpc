@@ -3,12 +3,10 @@ import json
 import time
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
     from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
     from .server import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic
     from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
     from server import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG

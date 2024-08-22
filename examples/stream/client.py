@@ -4,13 +4,11 @@ import time
 import numpy as np
 from srpc import SRPCClient
 
+
 class StreamerClientExample(SRPCClient):
-    def __init__(self, host, port, sub_port = None):
-        SRPCClient.__init__(self, host = host, port = port, sub_port = sub_port)    
+    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True):                
+        SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only)# , no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
-    # there is a method .parse in SRPCClient that helps parse the response from SRPCServer's
-
-    # basically here we are wrapping aroung the methods in the StreamServer to make the API similar
     def set_m(self, m):
         rep = self.call(method = 'set_m', args = [], kwargs = {'m':m}, close = False)
         return self.parse(rep)
@@ -19,27 +17,23 @@ class StreamerClientExample(SRPCClient):
         rep = self.call(method = 'set_s', args = [], kwargs = {'s':s}, close = False)
         return self.parse(rep)        
 
-if __name__ == '__main__':
-    
-    host = 'localhost'
-    port = 6000
 
-    client = StreamerClientExample(host, port, port+1)
-    client.subscribe("random_number")
+if __name__ == '__main__':
+    client = StreamerClientExample(req_addr = "tcp://127.0.0.1:6420", sub_addr = "tcp://127.0.0.1:6421", last_msg_only = False)        
+    client.subscribe("somekey")
+
     print(client.set_m(10))
+
     c = 0
     while True:
-        topic, msg = client.listen()
-        if topic is not None:
-            print(topic.topic, msg)
+        print(client.listen())
         c+=1
         if c>5:
             break
     print(client.set_m(-10))
     c = 0
     while True:
-        if topic is not None:
-            print(topic.topic, msg)
+        print(client.listen())
         c+=1
         if c>5:
             break

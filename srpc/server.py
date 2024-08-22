@@ -6,15 +6,15 @@ import random
 import string
 
 try:
-    from .wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
+    from .utils import SRPCTopic, clear_screen
     from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
 except ImportError:
-    from wrappers import SocketReqRep, SocketPub, SocketSub, SRPCTopic, clear_screen, QueueWrapper, Proxy
+    from utils import SRPCTopic, clear_screen
     from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
 try:
-    from .defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
+    from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 except ImportError:
-    from defaults import REGISTRY_ADDR, REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, PUBLISH_PERIOD
+    from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 
 # function to build a response from the server
 # easier to check how the server responds
@@ -60,9 +60,6 @@ class SRPCServer:
         self._pub_socket = ZMQP(ctx = self.ctx, lvc = self._lvc, timeo = self._timeo)
         self._pub_socket.bind(self._pub_addr)
 
-        self._registry_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
-        self._registry_socket.connect(self._registry_addr)
-
         self._functions = {}
         self._classes = {}
         self._class_instances = {}        
@@ -78,6 +75,10 @@ class SRPCServer:
         self._worker_addr = "inproc://"+generate_random_string(8)
 
     def registry_heartbeat(self):
+
+        self._registry_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
+        self._registry_socket.connect(self._registry_addr)
+
         while not self.stop_event.isSet(): 
             try:
                 req = {
@@ -96,10 +97,11 @@ class SRPCServer:
                 while time.time() - s < REGISTRY_HEARTBEAT:
                     time.sleep(0.5)
                     if self.stop_event.isSet():
-                        return
+                        break
             except Exception as e:
                 print('Error in registry_heartbeat: ', e)
                 pass
+        self._registry_socket.close()
 
     def publish(self, topic:str, msg:str):
         if not isinstance(msg, str):
@@ -244,7 +246,6 @@ class SRPCServer:
         self._req_queue.stop()
         print(f'Server {self._name} joining registry')
         self._reg_th.join()        
-        self._registry_socket.close()
         self._pub_socket.close()
         self.ctx.term()
         print(f"Server {self._name} closed")

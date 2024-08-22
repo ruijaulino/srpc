@@ -435,7 +435,7 @@ class ZMQReliableQueueWorker(ZMQR):
     def __init__(self, ctx:zmq.Context):
         '''
         '''
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, identity = self.create_identity(), reconnect = True)
+        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = self.create_identity(), reconnect = True)
         self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
         self.queue_dead = False
 
