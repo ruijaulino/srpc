@@ -2,6 +2,7 @@ import itertools
 import sys
 import zmq
 import custom_zmq
+import json
 
 REQUEST_TIMEOUT = 10
 REQUEST_RETRIES = 3
@@ -16,6 +17,8 @@ abort = False
 for sequence in range(1):
     if abort: break
     request = 'request ' + str(sequence)
+    request = {'request':sequence, 'hey':"ola"}
+    request = json.dumps(request)
     print("Sending (%s)", request)
     s.send(request)
 

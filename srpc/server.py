@@ -170,7 +170,6 @@ class SRPCServer:
             try:
                 clientid, req = worker_socket.recv_work()
                 if req is not None:            
-                    # if self.worker_info: print('Request on ', wid)
                     try:
                         # req to json
                         req = json.loads(req)                        

@@ -7,6 +7,7 @@ from collections import OrderedDict
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
 COMM_HEARTBEAT_INTERVAL = 3
+ENCODING = 'utf-8' #'Windows-1252'
 
 # Generica, asynch and stoppable ZMQ REQ/REP socket in a wrapper
 class ZMQR:
@@ -53,9 +54,11 @@ class ZMQR:
         '''
         msg: str or list of strings
         '''
-        enc_msg = b"\x01"
+
+        enc_msg = "\x01".encode()
         if isinstance(msg, str):
             enc_msg = msg.encode()
+
         elif isinstance(msg, list):
             enc_msg = []
             for e in msg: 
@@ -96,7 +99,7 @@ class ZMQR:
         timeo = 1000*timeo if timeo else self.timeo
         # check if we can send - make poll with a timeout for the operation to write
         if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
-            self.socket.send_string(msg)
+            self.socket.send(self._encode_msg(msg))
             return 1
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type == zmq.REP:
@@ -120,7 +123,8 @@ class ZMQR:
     def recv(self, timeo:int = None):
         timeo = 1000*timeo if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_string()
+            msg = self.socket.recv()
+            msg = self._decode_msg(msg)
             return msg
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type in [zmq.REQ, zmq.DEALER]:
@@ -202,14 +206,14 @@ class ZMQSimpleQueue:
                     # Everything after the second (delimiter) frame is reply
                     reply = msg[2:]
                     # Forward message to client if it's not a READY message
-                    if reply[0] != COMM_ALIVE.encode():
+                    if reply[0] != COMM_ALIVE.encode(ENCODING):
                         frontend.send_multipart(reply)
                     else:
                         print(f'Worker {address.decode()} is ready')
                 if socks.get(frontend) == zmq.POLLIN:
                     #  Get client request, route to first available worker
                     msg = frontend.recv_multipart()
-                    request = [workers.pop(0), ''.encode()] + msg
+                    request = [workers.pop(0), ''.encode(ENCODING)] + msg
                     backend.send_multipart(request)
 
             except Exception as e:
@@ -332,7 +336,6 @@ class ZMQReliableQueue:
                 q.start()
                 exit(0)
         '''
-        print('entao')
         self.ctx = ctx
         self.client_addr = client_addr
         self.worker_addr = worker_addr
@@ -340,8 +343,7 @@ class ZMQReliableQueue:
         self.standalone = standalone
         self._stopevent = threading.Event()
         self.th = None
-        print('built')
-
+        
     def _condition(self):
         if self.standalone:
             return True
@@ -350,26 +352,20 @@ class ZMQReliableQueue:
 
     def queue(self):
 
-        print('HEY')
         frontend = self.ctx.socket(zmq.ROUTER) # ROUTER
         backend = self.ctx.socket(zmq.ROUTER) # ROUTER
-        print('HEY')
         frontend.bind(self.client_addr) # For clients
         backend.bind(self.worker_addr)  # For workers
-        print('HEY')
         poll_workers = zmq.Poller()
         poll_workers.register(backend, zmq.POLLIN)
 
-        print('HEY')
         poll_both = zmq.Poller()
         poll_both.register(frontend, zmq.POLLIN)
         poll_both.register(backend, zmq.POLLIN)
 
-        print('HEY')
         workers = ReliableWorkerQueue()
 
         heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
-        print('HEY')
 
         while self._condition():
             try:
@@ -391,8 +387,7 @@ class ZMQReliableQueue:
                     if len(msg) == 1:
                         if msg[0] != COMM_ALIVE.encode():
                             print(f'Worker {address} sent msg with wrong format')
-                        else:
-                            print(f'Worker {address} alive')
+
                     else:
                         frontend.send_multipart(msg)
 
@@ -420,7 +415,6 @@ class ZMQReliableQueue:
         '''
         # closing the sockets will trigger an error inside the thread
         # stopping the proxy        
-        print('call stop')
         self._stopevent.set()
         if self.th: self.th.join()
         
@@ -428,12 +422,9 @@ class ZMQReliableQueue:
         '''
         starts the queue
         '''
-        print('entao crl')
         if self.standalone:
-            print('???')
             self.queue()
         else:
-            print('??')
             # Start the proxy in a separate thread
             self.th = threading.Thread(target=self.queue)
             self.th.start()              
@@ -445,7 +436,7 @@ class ZMQReliableQueueWorker(ZMQR):
     def __init__(self, ctx:zmq.Context):
         '''
         '''
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, identity = self.create_identity(), reconnect = True)
+        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = self.create_identity(), reconnect = True)
         self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
         self.queue_dead = False
 
@@ -473,7 +464,6 @@ class ZMQReliableQueueWorker(ZMQR):
         # is a message is not received in this time it means that the queue is dead
         # keeps reconnecting
         msg = self.recv_multipart(timeo = COMM_HEARTBEAT_INTERVAL*2)
-        print('in recv_work: ', msg)
         clientid = None
         if msg:
             if len(msg) == 3:
@@ -513,11 +503,11 @@ class ZMQP:
                 with self._lock:
                     msg = self.socket.recv()
                     if msg[0] == 1:
-                        st = msg[1:].decode()
+                        st = msg[1:].decode(ENCODING)
                         # need to run all that startswith
                         for k,v in self.cache.items():
                             if k.startswith(st):
-                                self.socket.send_multipart([k.encode(), v.encode()])
+                                self.socket.send_string(f"{k} {v}")
         print('ZMQP lvc thread closed')
 
     def bind(self, addr:str = None):
@@ -533,7 +523,8 @@ class ZMQP:
             if self.lvc:
                 self.cache[topic] = msg
         if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
-            self.socket.send_multipart([topic.encode(),msg.encode()])
+            msg = f"{topic} {msg}"
+            self.socket.send_string(msg)
                 
     def close(self):
         if self.lvc:
@@ -561,12 +552,14 @@ class ZMQS:
         self.socket.setsockopt_string(zmq.UNSUBSCRIBE, topic)
 
     def subscribe(self, topic:str):
+        print('subscribe to ', topic)
         self.socket.setsockopt_string(zmq.SUBSCRIBE, topic)
     
     def recv(self):
         if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            topic, msg = self.socket.recv_multipart()
-            return topic.decode(), msg.decode()
+            msg = self.socket.recv_string()
+            topic, msg = msg.split(' ', 1)
+            return topic, msg
         return None, None
     
     def close(self):

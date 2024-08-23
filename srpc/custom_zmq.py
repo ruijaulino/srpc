@@ -7,7 +7,11 @@ from collections import OrderedDict
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
 COMM_HEARTBEAT_INTERVAL = 3
-ENCODING = 'Windows-1252'
+ENCODING = 'utf-8' #'Windows-1252'
+
+def create_identity():
+    return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
+
 
 # Generica, asynch and stoppable ZMQ REQ/REP socket in a wrapper
 class ZMQR:
@@ -15,7 +19,7 @@ class ZMQR:
         self.timeo = 1000*timeo
         self.ctx = ctx
         self.socket = None
-        self.identity = identity
+        self.identity = identity if identity else create_identity()
         self.zmq_type = zmq_type
         assert self.zmq_type in [zmq.REQ, zmq.REP, zmq.DEALER], "ZMQR must use a REP or REQ socket"
         self.addr = [] # list of addr
@@ -54,15 +58,22 @@ class ZMQR:
         '''
         msg: str or list of strings
         '''
-        enc_msg = b"\x01"
+
+        enc_msg = "\x01".encode()
         if isinstance(msg, str):
-            enc_msg = msg.encode(ENCODING)
+            #try:
+            enc_msg = msg.encode()
+            #except:
+            #    enc_msg = msg
 
         elif isinstance(msg, list):
             enc_msg = []
             for e in msg: 
                 if isinstance(e, str):
-                    e = e.encode(ENCODING)
+                    #try:
+                    e = e.encode()
+                    #except:
+                    #    pass
                 enc_msg.append(e)
         else:
             enc_msg = msg
@@ -71,15 +82,25 @@ class ZMQR:
     def _decode_msg(self, msg):
         '''
         msg: str or list of strings
+        Note: when we are controling the envelope, zmq can attribute
+        identities to sockets that are not decodable, that is the main reason
+        we do the try/except here. other solution to avoid this would be to force
+        all clients to have an identity (random one)
         '''
         dec_msg = ""
         if isinstance(msg, bytes):
-            dec_msg = msg.decode(ENCODING)
+            #try:
+            dec_msg = msg.decode()
+            #except:
+            #    dec_msg = msg
         elif isinstance(msg, list):
             dec_msg = []
             for e in msg: 
                 if isinstance(e, bytes):
-                    e = e.decode(ENCODING)
+                    #try:
+                    e = e.decode()
+                    #except:
+                    #    pass
                 dec_msg.append(e)
         else:
             dec_msg = msg
@@ -122,7 +143,8 @@ class ZMQR:
     def recv(self, timeo:int = None):
         timeo = 1000*timeo if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_string()
+            msg = self.socket.recv()
+            msg = self._decode_msg(msg)
             return msg
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type in [zmq.REQ, zmq.DEALER]:
@@ -377,28 +399,31 @@ class ZMQReliableQueue:
                 if socks.get(backend) == zmq.POLLIN:
                     # Use worker address for LRU routing
                     frames = backend.recv_multipart()
-
+                    #print('backend received: ', frames)
                     address = frames[0]
                     workers.ready(ReliableWorker(address))
 
                     # Validate control message, or return reply to client
                     msg = frames[1:]
                     if len(msg) == 1:
-                        if msg[0] != COMM_ALIVE.encode(ENCODING):
+                        if msg[0] != COMM_ALIVE.encode():
                             print(f'Worker {address} sent msg with wrong format')
 
                     else:
+                        # print('backend send to frontend: ', msg)
                         frontend.send_multipart(msg)
 
                 if socks.get(frontend) == zmq.POLLIN:
                     frames = frontend.recv_multipart()
+                    #print('frontend received: ', frames)
                     frames.insert(0, workers.next())
+                    #print('frontend send to backend: ', frames)
                     backend.send_multipart(frames)
 
                 # Send heartbeats to idle workers if it's time
                 if time.time() >= heartbeat_at:
                     for worker in workers.queue:
-                        msg = [worker, COMM_ALIVE.encode(ENCODING)]
+                        msg = [worker, COMM_ALIVE.encode()]
                         backend.send_multipart(msg)
                     heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
 
@@ -435,12 +460,11 @@ class ZMQReliableQueueWorker(ZMQR):
     def __init__(self, ctx:zmq.Context):
         '''
         '''
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = self.create_identity(), reconnect = True)
+        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = create_identity(), reconnect = True)
         self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
         self.queue_dead = False
 
-    def create_identity(self):
-        return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))        
+      
 
     def connect(self, addr:str = None):
         '''
@@ -448,7 +472,7 @@ class ZMQReliableQueueWorker(ZMQR):
         send message that is ready
         '''
         # create new identity
-        self.set_identity(self.create_identity())
+        self.set_identity(create_identity())
         # use the private method
         self._connect(addr)
         print("%s worker ready" % self.identity)
@@ -463,6 +487,7 @@ class ZMQReliableQueueWorker(ZMQR):
         # is a message is not received in this time it means that the queue is dead
         # keeps reconnecting
         msg = self.recv_multipart(timeo = COMM_HEARTBEAT_INTERVAL*2)
+        #print('in recv_work got msg: ', msg)
         clientid = None
         if msg:
             if len(msg) == 3:
