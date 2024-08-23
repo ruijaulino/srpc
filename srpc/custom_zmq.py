@@ -2,12 +2,22 @@ import zmq
 import threading
 from random import randint
 import time
+import random
+import string
 from collections import OrderedDict
 
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
 COMM_HEARTBEAT_INTERVAL = 3
+# COMM_TOPIC_ALL = '0all'
 ENCODING = 'utf-8' #'Windows-1252'
+
+def generate_random_string(n):
+    # Define the character set: lowercase, uppercase letters, digits
+    characters = string.ascii_letters + string.digits
+    # Generate a random string
+    random_string = ''.join(random.choice(characters) for _ in range(n))
+    return random_string
 
 def create_identity():
     return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
@@ -487,7 +497,6 @@ class ZMQReliableQueueWorker(ZMQR):
         # is a message is not received in this time it means that the queue is dead
         # keeps reconnecting
         msg = self.recv_multipart(timeo = COMM_HEARTBEAT_INTERVAL*2)
-        #print('in recv_work got msg: ', msg)
         clientid = None
         if msg:
             if len(msg) == 3:
@@ -507,6 +516,9 @@ class ZMQReliableQueueWorker(ZMQR):
 
 # --------------------------------------------
 # pub socket with last value caching
+# if we are doing LVC, we create an internal socket to pub inside the thread
+# otherwise we bind directly this pub socket to the exterior
+# maybe could have just used a queue but in that case we would 
 class ZMQP:
     def __init__(self, ctx:zmq.Context = None, lvc:bool = True, timeo:int = 1):
         self.ctx = ctx
@@ -516,39 +528,77 @@ class ZMQP:
         self._stopevent = threading.Event()
         self._lock = threading.Lock()
         self.timeo = 1000*timeo if timeo else 1000
-        self.cache = {}
         self.socket = None
+        self._inproc_addr = "inproc://"+generate_random_string(8)
 
-    def publvc(self):
+    def _lvc(self):
         # detect new subscribers
+        # sub to the internal socket
+        # xpub to outside
+
+        # cache
+        cache = {}
+
+        # sub to internal socket
+        sub_socket = self.ctx.socket(zmq.SUB)
+        sub_socket.connect(self._inproc_addr)
+        sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
+        
+        # comm with exterior is made with a xpub
+        xpub_socket = self.ctx.socket(zmq.XPUB) 
+        xpub_socket.bind(self.addr)        
+        # this flag is needed otherwise the xpub will not receive repeated topics sub request
+        # and we cannot reroute the last message
+        xpub_socket.setsockopt(zmq.XPUB_VERBOSE, True) 
+
+        # poller for sockets
+        poller = zmq.Poller()
+        poller.register(sub_socket, zmq.POLLIN)
+        poller.register(xpub_socket, zmq.POLLIN)        
+
         print('ZMQP lvc thread start')
         while not self._stopevent.isSet():            
-            if (self.socket.poll(self.timeo, zmq.POLLIN) & zmq.POLLIN) != 0:
-                with self._lock:
-                    msg = self.socket.recv()
-                    if msg[0] == 1:
-                        st = msg[1:].decode(ENCODING)
-                        # need to run all that startswith
-                        for k,v in self.cache.items():
-                            if k.startswith(st):
-                                self.socket.send_string(f"{k} {v}")
+            
+            events = dict(poller.poll(1000))
+            # for any new topic data, cache it and then forward
+            if sub_socket in events:
+                tmp = sub_socket.recv_multipart()
+                topic, msg = tmp                
+                cache[topic.decode()] = msg.decode()
+                xpub_socket.send_multipart(tmp)
+
+            # handle subscriptions
+            # When we get a new subscription we pull data from the cache:
+            if xpub_socket in events:
+                msg = xpub_socket.recv()
+                # Event is one byte 0=unsub or 1=sub, followed by topic
+                
+                if msg[0] == 1:
+                    st = msg[1:].decode()
+                    # need to run all that startswith
+                    for k,v in cache.items():
+                        if k.startswith(st):
+                            xpub_socket.send_multipart([k.encode(), v.encode()])
+        
         print('ZMQP lvc thread closed')
+        sub_socket.close()
+
 
     def bind(self, addr:str = None):
         self.addr = addr
-        self.socket = self.ctx.socket(zmq.XPUB)
-        self.socket.bind(self.addr)
+        self.socket = self.ctx.socket(zmq.PUB)
         if self.lvc:
-            self.th = threading.Thread(target = self.publvc)
+            # sockets binds to a random address inproc
+            self.socket.bind(self._inproc_addr)
+            self.th = threading.Thread(target = self._lvc)
             self.th.start()
+        else:
+            # comm with exterior is made with a pub
+            self.socket.bind(self.addr)
 
     def publish(self, topic:str, msg:str):        
-        with self._lock:
-            if self.lvc:
-                self.cache[topic] = msg
         if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
-            msg = f"{topic} {msg}"
-            self.socket.send_string(msg)
+            self.socket.send_multipart([topic.encode(), msg.encode()])
                 
     def close(self):
         if self.lvc:
@@ -573,17 +623,15 @@ class ZMQS:
         self.socket.connect(self.addr)
 
     def unsubscribe(self, topic:str):
-        self.socket.setsockopt_string(zmq.UNSUBSCRIBE, topic)
+        self.socket.unsubscribe(topic.encode())
 
-    def subscribe(self, topic:str):
-        print('subscribe to ', topic)
-        self.socket.setsockopt_string(zmq.SUBSCRIBE, topic)
+    def subscribe(self, topic:str = ''):
+        self.socket.subscribe(''.encode())
     
     def recv(self):
         if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_string()
-            topic, msg = msg.split(' ', 1)
-            return topic, msg
+            topic, msg = self.socket.recv_multipart()
+            return topic.decode(), msg.decode()
         return None, None
     
     def close(self):

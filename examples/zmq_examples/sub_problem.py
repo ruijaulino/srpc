@@ -49,6 +49,7 @@ addr = "tcp://127.0.0.1:5556"
 s.connect(addr)
 
 topic = "%03d" % randint(0,999)
+print('sub to all')
 s.subscribe(topic)
 
 while True:

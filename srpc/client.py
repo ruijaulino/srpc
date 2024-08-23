@@ -13,13 +13,13 @@ except ImportError:
 
 
 class SRPCClient:
-    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):
+    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
         self._req_addr = req_addr
         self._sub_addr = sub_addr
         self._timeo = timeo
         self._last_msg_only = last_msg_only
-        self._no_rep_msg = no_rep_msg
-        self._no_req_msg = no_req_msg
+        self._no_rep_msg = no_rep_msg if no_rep_msg else NO_REP_MSG
+        self._no_req_msg = no_req_msg if no_req_msg else NO_REQ_MSG
         
         self.ctx = zmq.Context.instance()
         

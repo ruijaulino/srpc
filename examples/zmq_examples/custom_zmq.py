@@ -2,6 +2,8 @@ import zmq
 import threading
 from random import randint
 import time
+import random
+import string
 from collections import OrderedDict
 
 # default message to use in Queue to signal the worker is ready
@@ -9,13 +11,24 @@ COMM_ALIVE = "\x01"
 COMM_HEARTBEAT_INTERVAL = 3
 ENCODING = 'utf-8' #'Windows-1252'
 
+def generate_random_string(n):
+    # Define the character set: lowercase, uppercase letters, digits
+    characters = string.ascii_letters + string.digits
+    # Generate a random string
+    random_string = ''.join(random.choice(characters) for _ in range(n))
+    return random_string
+
+def create_identity():
+    return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
+
+
 # Generica, asynch and stoppable ZMQ REQ/REP socket in a wrapper
 class ZMQR:
     def __init__(self, ctx:zmq.Context, zmq_type:int, timeo:int = 1, identity:str = None, reconnect:bool = True):
         self.timeo = 1000*timeo
         self.ctx = ctx
         self.socket = None
-        self.identity = identity
+        self.identity = identity if identity else create_identity()
         self.zmq_type = zmq_type
         assert self.zmq_type in [zmq.REQ, zmq.REP, zmq.DEALER], "ZMQR must use a REP or REQ socket"
         self.addr = [] # list of addr
@@ -57,13 +70,19 @@ class ZMQR:
 
         enc_msg = "\x01".encode()
         if isinstance(msg, str):
+            #try:
             enc_msg = msg.encode()
+            #except:
+            #    enc_msg = msg
 
         elif isinstance(msg, list):
             enc_msg = []
             for e in msg: 
                 if isinstance(e, str):
+                    #try:
                     e = e.encode()
+                    #except:
+                    #    pass
                 enc_msg.append(e)
         else:
             enc_msg = msg
@@ -72,15 +91,25 @@ class ZMQR:
     def _decode_msg(self, msg):
         '''
         msg: str or list of strings
+        Note: when we are controling the envelope, zmq can attribute
+        identities to sockets that are not decodable, that is the main reason
+        we do the try/except here. other solution to avoid this would be to force
+        all clients to have an identity (random one)
         '''
         dec_msg = ""
         if isinstance(msg, bytes):
+            #try:
             dec_msg = msg.decode()
+            #except:
+            #    dec_msg = msg
         elif isinstance(msg, list):
             dec_msg = []
             for e in msg: 
                 if isinstance(e, bytes):
+                    #try:
                     e = e.decode()
+                    #except:
+                    #    pass
                 dec_msg.append(e)
         else:
             dec_msg = msg
@@ -379,6 +408,7 @@ class ZMQReliableQueue:
                 if socks.get(backend) == zmq.POLLIN:
                     # Use worker address for LRU routing
                     frames = backend.recv_multipart()
+                    #print('backend received: ', frames)
                     address = frames[0]
                     workers.ready(ReliableWorker(address))
 
@@ -389,11 +419,14 @@ class ZMQReliableQueue:
                             print(f'Worker {address} sent msg with wrong format')
 
                     else:
+                        # print('backend send to frontend: ', msg)
                         frontend.send_multipart(msg)
 
                 if socks.get(frontend) == zmq.POLLIN:
                     frames = frontend.recv_multipart()
+                    #print('frontend received: ', frames)
                     frames.insert(0, workers.next())
+                    #print('frontend send to backend: ', frames)
                     backend.send_multipart(frames)
 
                 # Send heartbeats to idle workers if it's time
@@ -436,12 +469,11 @@ class ZMQReliableQueueWorker(ZMQR):
     def __init__(self, ctx:zmq.Context):
         '''
         '''
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = self.create_identity(), reconnect = True)
+        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = create_identity(), reconnect = True)
         self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
         self.queue_dead = False
 
-    def create_identity(self):
-        return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))        
+      
 
     def connect(self, addr:str = None):
         '''
@@ -449,7 +481,7 @@ class ZMQReliableQueueWorker(ZMQR):
         send message that is ready
         '''
         # create new identity
-        self.set_identity(self.create_identity())
+        self.set_identity(create_identity())
         # use the private method
         self._connect(addr)
         print("%s worker ready" % self.identity)
@@ -464,6 +496,7 @@ class ZMQReliableQueueWorker(ZMQR):
         # is a message is not received in this time it means that the queue is dead
         # keeps reconnecting
         msg = self.recv_multipart(timeo = COMM_HEARTBEAT_INTERVAL*2)
+        #print('in recv_work got msg: ', msg)
         clientid = None
         if msg:
             if len(msg) == 3:
@@ -483,6 +516,9 @@ class ZMQReliableQueueWorker(ZMQR):
 
 # --------------------------------------------
 # pub socket with last value caching
+# if we are doing LVC, we create an internal socket to pub inside the thread
+# otherwise we bind directly this pub socket to the exterior
+# maybe could have just used a queue but in that case we would 
 class ZMQP:
     def __init__(self, ctx:zmq.Context = None, lvc:bool = True, timeo:int = 1):
         self.ctx = ctx
@@ -492,39 +528,76 @@ class ZMQP:
         self._stopevent = threading.Event()
         self._lock = threading.Lock()
         self.timeo = 1000*timeo if timeo else 1000
-        self.cache = {}
         self.socket = None
+        self._inproc_addr = "inproc://"+generate_random_string(8)
 
-    def publvc(self):
+    def _lvc(self):
         # detect new subscribers
+        # sub to the internal socket
+        # xpub to outside
+
+        # cache
+        cache = {}
+
+        # sub to internal socket
+        sub_socket = self.ctx.socket(zmq.SUB)
+        sub_socket.connect(self._inproc_addr)
+        sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
+        
+        # comm with exterior is made with a xpub
+        xpub_socket = self.ctx.socket(zmq.XPUB) 
+        xpub_socket.bind(self.addr)        
+
+        # poller for sockets
+        poller = zmq.Poller()
+        poller.register(sub_socket, zmq.POLLIN)
+        poller.register(xpub_socket, zmq.POLLIN)        
+
         print('ZMQP lvc thread start')
         while not self._stopevent.isSet():            
-            if (self.socket.poll(self.timeo, zmq.POLLIN) & zmq.POLLIN) != 0:
-                with self._lock:
-                    msg = self.socket.recv()
-                    if msg[0] == 1:
-                        st = msg[1:].decode(ENCODING)
-                        # need to run all that startswith
-                        for k,v in self.cache.items():
-                            if k.startswith(st):
-                                self.socket.send_string(f"{k} {v}")
+            
+            events = dict(poller.poll(1000))
+            # for any new topic data, cache it and then forward
+            if sub_socket in events:
+                tmp = sub_socket.recv_multipart()
+                topic, msg = tmp                
+                cache[topic.decode()] = msg.decode()
+                xpub_socket.send_multipart(tmp)
+
+            # handle subscriptions
+            # When we get a new subscription we pull data from the cache:
+            if xpub_socket in events:
+                msg = xpub_socket.recv()
+                # Event is one byte 0=unsub or 1=sub, followed by topic
+                
+                if msg[0] == 1:
+                    st = msg[1:].decode()
+                    print('new sub to: ', st)
+                    print('in cache: ', cache)
+                    # need to run all that startswith
+                    for k,v in cache.items():
+                        if k.startswith(st):
+                            xpub_socket.send_multipart([k.encode(), v.encode()])
+        
         print('ZMQP lvc thread closed')
+        sub_socket.close()
+
 
     def bind(self, addr:str = None):
         self.addr = addr
-        self.socket = self.ctx.socket(zmq.XPUB)
-        self.socket.bind(self.addr)
+        self.socket = self.ctx.socket(zmq.PUB)
         if self.lvc:
-            self.th = threading.Thread(target = self.publvc)
+            # sockets binds to a random address inproc
+            self.socket.bind(self._inproc_addr)
+            self.th = threading.Thread(target = self._lvc)
             self.th.start()
+        else:
+            # comm with exterior is made with a pub
+            self.socket.bind(self.addr)
 
     def publish(self, topic:str, msg:str):        
-        with self._lock:
-            if self.lvc:
-                self.cache[topic] = msg
         if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
-            msg = f"{topic} {msg}"
-            self.socket.send_string(msg)
+            self.socket.send_multipart([topic.encode(), msg.encode()])
                 
     def close(self):
         if self.lvc:
@@ -551,15 +624,14 @@ class ZMQS:
     def unsubscribe(self, topic:str):
         self.socket.setsockopt_string(zmq.UNSUBSCRIBE, topic)
 
-    def subscribe(self, topic:str):
-        print('subscribe to ', topic)
-        self.socket.setsockopt_string(zmq.SUBSCRIBE, topic)
+    def subscribe(self, topic:str = ''):
+        self.socket.subscribe(topic.encode())
+        # self.socket.setsockopt(zmq.SUBSCRIBE, topic.encode())
     
     def recv(self):
         if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_string()
-            topic, msg = msg.split(' ', 1)
-            return topic, msg
+            topic, msg = self.socket.recv_multipart()
+            return topic.decode(), msg.decode()
         return None, None
     
     def close(self):

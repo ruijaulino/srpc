@@ -17,14 +17,16 @@ except ImportError:
 
 
 class SRPCRegistry:
-    def __init__(self, ctx:zmq.Context, addr:str = REGISTRY_ADDR, timeo:int = 10):
-        self.addr = addr
-        self.socket = ZMQR(ctx = ctx, zmq_type = zmq.REP, timeo = timeo)
+    def __init__(self, addr:str = None, timeo:int = 10):
+        self.addr = addr if addr else REGISTRY_ADDR
+        self.ctx = zmq.Context()
+        self.socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REP, timeo = timeo)
         self.socket.bind(self.addr)
         self.services = {}
     
     def close(self):
         self.socket.close()      
+        self.ctx.term()
         print("Registry closed")  
 
     def handle_heartbeat(self, info = {}):
@@ -84,7 +86,6 @@ class SRPCRegistry:
         self.close()      
 
 if __name__ == "__main__":
-    ctx = zmq.Context()
-    registry = SRPCRegistry(ctx)
+    registry = SRPCRegistry()
     registry.serve()
-    ctx.term()
+    

@@ -7,10 +7,10 @@ import string
 
 try:
     from .utils import SRPCTopic, clear_screen
-    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
+    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, generate_random_string
 except ImportError:
     from utils import SRPCTopic, clear_screen
-    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker
+    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, generate_random_string
 try:
     from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 except ImportError:
@@ -22,13 +22,6 @@ except ImportError:
 OK_STATUS = 'ok'
 ERROR_STATUS = 'error'
 
-def generate_random_string(n):
-    # Define the character set: lowercase, uppercase letters, digits
-    characters = string.ascii_letters + string.digits
-    # Generate a random string
-    random_string = ''.join(random.choice(characters) for _ in range(n))
-    return random_string
-
 def build_server_response(status:str, output, error_msg:str):
     return {'status':status, 'output':output, 'error_msg':error_msg}
 
@@ -38,7 +31,7 @@ class SRPCServer:
                 name:str, 
                 rep_addr:str,
                 pub_addr:str,
-                registry_addr:str = REGISTRY_ADDR,
+                registry_addr:str = None,
                 timeo:int = 1, 
                 n_workers:int = 1, 
                 thread_safe:bool = False, 
@@ -48,7 +41,7 @@ class SRPCServer:
         self._name = name
         self._rep_addr = rep_addr
         self._pub_addr = pub_addr
-        self._registry_addr = registry_addr
+        self._registry_addr = registry_addr if registry_addr else REGISTRY_ADDR
         self._lvc = lvc
         self._timeo = timeo
         self._clear_screen = clear_screen
