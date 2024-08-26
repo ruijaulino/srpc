@@ -4,11 +4,12 @@ from random import randint
 import time
 import random
 import string
+import datetime as dt
 from collections import OrderedDict
 
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
-COMM_HEARTBEAT_INTERVAL = 3
+COMM_HEARTBEAT_INTERVAL = 1
 # COMM_TOPIC_ALL = '0all'
 ENCODING = 'utf-8' #'Windows-1252'
 
@@ -113,7 +114,7 @@ class ZMQR:
         self.socket.close()
 
     def send(self, msg:str, timeo:int = None):
-        timeo = 1000*timeo if timeo else self.timeo
+        timeo = int(1000*timeo) if timeo else self.timeo
         # check if we can send - make poll with a timeout for the operation to write
         if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
             self.socket.send(self._encode_msg(msg))
@@ -127,7 +128,7 @@ class ZMQR:
         '''
         msg: list of strings
         '''
-        timeo = 1000*timeo if timeo else self.timeo
+        timeo = int(1000*timeo) if timeo else self.timeo
         # check if we can send - make poll with a timeout for the operation to write
         if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
             self.socket.send_multipart(self._encode_msg(msg))
@@ -138,7 +139,7 @@ class ZMQR:
         return 0        
 
     def recv(self, timeo:int = None):
-        timeo = 1000*timeo if timeo else self.timeo
+        timeo = int(1000*timeo) if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
             msg = self.socket.recv()
             msg = self._decode_msg(msg)
@@ -149,7 +150,7 @@ class ZMQR:
         return None
 
     def recv_multipart(self, timeo:int = None):
-        timeo = 1000*timeo if timeo else self.timeo
+        timeo = int(1000*timeo) if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
             msg = self.socket.recv_multipart()
             msg = self._decode_msg(msg)
@@ -323,7 +324,7 @@ class ReliableWorkerQueue(object):
         self.queue[worker.address] = worker
 
     def purge(self):
-        """Look for & kill expired workers."""
+        """Look for & kill workers that are not sending heartbeats"""
         t = time.time()
         expired = []
         for address, worker in self.queue.items():
@@ -391,39 +392,30 @@ class ZMQReliableQueue:
                 else:
                     poller = poll_workers
                 socks = dict(poller.poll(COMM_HEARTBEAT_INTERVAL * 1000))
-
-                # Handle worker activity on backend
+                # Handle worker activity on backend                
                 if socks.get(backend) == zmq.POLLIN:
                     # Use worker address for LRU routing
                     frames = backend.recv_multipart()
-                    #print('backend received: ', frames)
                     address = frames[0]
                     workers.ready(ReliableWorker(address))
-
                     # Validate control message, or return reply to client
                     msg = frames[1:]
                     if len(msg) == 1:
-                        if msg[0] != COMM_ALIVE.encode():
-                            print(f'Worker {address} sent msg with wrong format')
-
+                        if msg[0] == COMM_ALIVE.encode():                            
+                            # reply imediately to the heartbeat
+                            msg = [address, COMM_ALIVE.encode()]
+                            backend.send_multipart(msg)
+                        else:
+                            print(f'Worker {address} sent msg with unknown format')
                     else:
-                        # print('backend send to frontend: ', msg)
+                        # send worker reply to the client via frontend
                         frontend.send_multipart(msg)
-
+                # Handle clients requests in the frontend
                 if socks.get(frontend) == zmq.POLLIN:
                     frames = frontend.recv_multipart()
                     frames.insert(0, workers.next())
                     backend.send_multipart(frames)
-
-                # Send heartbeats to idle workers if it's time
-                if time.time() >= heartbeat_at:
-                    for worker in workers.queue:
-                        msg = [worker, COMM_ALIVE.encode()]
-                        backend.send_multipart(msg)
-                    heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
-
                 workers.purge()
-
             except Exception as e:
                 print('ZMQQueue thread error : ', e)
                 if self.standalone: 
@@ -449,16 +441,28 @@ class ZMQReliableQueue:
             self.th.start()              
 
 # implement a worker for the paranoid pirate pattern
-# keeps exchanging heartbeats
+# uses ping-pong between worker and queue
+# the workers pings the queue and it should answer
+# if it does not answer within the heartbeat time, then the worker assumes the queue is dead
+# and starts a new connection
+# when the queue get a message from the worker puts that worker to be used
 class ZMQReliableQueueWorker(ZMQR):
     # should always receive and send in multipart because the queue need to handle the envelope
     def __init__(self, ctx:zmq.Context):
         '''
         '''
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = create_identity(), reconnect = True)
-        self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
-        self.queue_dead = False
-
+        ZMQR.__init__(
+                        self, 
+                        ctx = ctx, 
+                        zmq_type = zmq.DEALER, 
+                        timeo = COMM_HEARTBEAT_INTERVAL/10, 
+                        identity = create_identity(), 
+                        reconnect = False
+                        )                
+        self.ping_t = None        
+        self.pong_at = None
+        self.queue_alive = False
+    
     def connect(self, addr:str = None):
         '''
         connect the socket
@@ -469,6 +473,9 @@ class ZMQReliableQueueWorker(ZMQR):
         # use the private method
         self._connect(addr)
         print("%s worker ready" % self.identity)
+        self.ping_t = time.time()#  + COMM_HEARTBEAT_INTERVAL
+        self.pong_t = time.time()
+        self.queue_alive = False
         self.send(COMM_ALIVE)
 
     def recv_work(self):
@@ -479,19 +486,31 @@ class ZMQReliableQueueWorker(ZMQR):
         '''
         # is a message is not received in this time it means that the queue is dead
         # keeps reconnecting
-        msg = self.recv_multipart(timeo = COMM_HEARTBEAT_INTERVAL*2)
+        msg = self.recv_multipart()
         clientid = None
-        if msg:
+        if msg:    
+            # if we get something means that the queue is up
+            self.queue_alive = True
+            self.pong_t = time.time()
+            # received a message with work
             if len(msg) == 3:
                 clientid, msg = msg[0], msg[2]
-            elif len(msg) == 1 and msg[0] == COMM_ALIVE:
-                msg = None
-        else:
-            self.queue_dead = True
-        # signal to the queue that worker is alive
-        if time.time() > self.heartbeat_at:
-            self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
-            self.send(COMM_ALIVE)
+            elif len(msg) == 1 and msg[0] == COMM_ALIVE:                
+                msg, clientid = None, None
+            else:
+                # received a pong/other message with a unknown format
+                print(f"Unknown message format from queue")
+                msg, clientid = None, None
+        # queue is not responding condition
+        if not self.queue_alive and (time.time() - self.pong_t > COMM_HEARTBEAT_INTERVAL):
+            print(f"Queue not responding to worker {self.identity}")
+            self.connect()
+        else: 
+            # signal to the queue that worker is alive by pinging it
+            if time.time() > self.ping_t + COMM_HEARTBEAT_INTERVAL:
+                self.ping_t = time.time()
+                self.queue_alive = False
+                self.send(COMM_ALIVE)
         return clientid, msg
 
     def send_work(self, clientid:str, msg:str):

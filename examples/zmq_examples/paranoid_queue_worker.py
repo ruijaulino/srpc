@@ -15,7 +15,6 @@ while True:
         print('Work received: ', msg)    
         print('sleeping')
         # time.sleep(COMM_HEARTBEAT_INTERVAL*2)
-        time.sleep(10)
         print('send reply')        
         rep = {'status':'ok', 'ola':1.5}
         rep = json.dumps(rep)
