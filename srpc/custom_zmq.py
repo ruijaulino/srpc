@@ -23,7 +23,7 @@ def create_identity():
     return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
 
 
-# Generica, asynch and stoppable ZMQ REQ/REP socket in a wrapper
+# Generic, asynch and stoppable ZMQ REQ/REP socket in a wrapper
 class ZMQR:
     def __init__(self, ctx:zmq.Context, zmq_type:int, timeo:int = 1, identity:str = None, reconnect:bool = True):
         self.timeo = 1000*timeo
@@ -71,19 +71,12 @@ class ZMQR:
 
         enc_msg = "\x01".encode()
         if isinstance(msg, str):
-            #try:
             enc_msg = msg.encode()
-            #except:
-            #    enc_msg = msg
-
         elif isinstance(msg, list):
             enc_msg = []
             for e in msg: 
                 if isinstance(e, str):
-                    #try:
                     e = e.encode()
-                    #except:
-                    #    pass
                 enc_msg.append(e)
         else:
             enc_msg = msg
@@ -99,18 +92,12 @@ class ZMQR:
         '''
         dec_msg = ""
         if isinstance(msg, bytes):
-            #try:
             dec_msg = msg.decode()
-            #except:
-            #    dec_msg = msg
         elif isinstance(msg, list):
             dec_msg = []
             for e in msg: 
                 if isinstance(e, bytes):
-                    #try:
                     e = e.decode()
-                    #except:
-                    #    pass
                 dec_msg.append(e)
         else:
             dec_msg = msg
@@ -425,9 +412,7 @@ class ZMQReliableQueue:
 
                 if socks.get(frontend) == zmq.POLLIN:
                     frames = frontend.recv_multipart()
-                    #print('frontend received: ', frames)
                     frames.insert(0, workers.next())
-                    #print('frontend send to backend: ', frames)
                     backend.send_multipart(frames)
 
                 # Send heartbeats to idle workers if it's time
@@ -473,8 +458,6 @@ class ZMQReliableQueueWorker(ZMQR):
         ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.DEALER, timeo = 2*COMM_HEARTBEAT_INTERVAL, identity = create_identity(), reconnect = True)
         self.heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
         self.queue_dead = False
-
-      
 
     def connect(self, addr:str = None):
         '''
