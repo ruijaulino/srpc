@@ -9,8 +9,7 @@ from collections import OrderedDict
 
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
-COMM_HEARTBEAT_INTERVAL = 1
-# COMM_TOPIC_ALL = '0all'
+COMM_HEARTBEAT_INTERVAL = 5
 ENCODING = 'utf-8' #'Windows-1252'
 
 def generate_random_string(n):
