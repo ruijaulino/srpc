@@ -418,7 +418,10 @@ class ZMQReliableQueue:
             except Exception as e:
                 print('ZMQQueue thread error : ', e)
                 if self.standalone: 
-                    break            
+                    break      
+        frontend.close()
+        backend.close()
+
     def stop(self):
         '''
         stops the queue

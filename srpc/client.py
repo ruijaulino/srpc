@@ -31,10 +31,14 @@ class SRPCClient:
             self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
             self.sub_socket.connect(self._sub_addr)
 
-    def close(self):
+    def close(self, term = True):
+        # if the client (or some class that inherits from SRPCClient) 
+        # is being used where another shared context exits, then we must take
+        # case not to terminate the context here as it may break the code 
+        # when we try to close it!
         self.req_socket.close()
         if self.sub_socket: self.sub_socket.close()
-        self.ctx.term()
+        if term: self.ctx.term()
 
     def subscribe(self, topic:str):
         if self.sub_socket:

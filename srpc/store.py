@@ -143,7 +143,7 @@ class StoreClient(SRPCClient):
         return self.invoque(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
         
 def test_server():
-    server = Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552")  
+    server = Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552", registry_addr = REGISTRY_ADDR)  
     server.serve()
 
 def test_client():
@@ -169,5 +169,5 @@ def test_client():
    
 
 if __name__ == "__main__":
-    # test_server()
-    test_client()
+    test_server()
+    # test_client()

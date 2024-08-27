@@ -46,8 +46,6 @@ class SRPCServer:
         self.ctx = zmq.Context.instance()
         self.stop_event = threading.Event()  
 
-        print(self._pub_addr)
-
         if self._pub_addr:
             self._pub_socket = ZMQP(ctx = self.ctx, lvc = self._lvc, timeo = self._timeo)
             self._pub_socket.bind(self._pub_addr)
@@ -87,8 +85,7 @@ class SRPCServer:
             except Exception as e:
                 print('Error in registry_heartbeat: ', e)
                 pass
-
-        client.close()
+        client.close(False)
 
     def publish(self, topic:str, msg:str):
         if not isinstance(msg, str):
@@ -238,7 +235,8 @@ class SRPCServer:
         if self._reg_th:
             print(f'Server {self._name} joining registry')
             self._reg_th.join()                
-        self._pub_socket: self._pub_socket.close()
+        if self._pub_socket: 
+            self._pub_socket.close()
         self.ctx.term()
         print(f"Server {self._name} closed")
 
