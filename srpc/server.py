@@ -69,24 +69,23 @@ class SRPCServer:
     def registry_heartbeat(self):
         client = RegistryClient(req_addr = self._registry_addr)
         while not self.stop_event.isSet(): 
-            # try:
-            info = {
-                    "name": self._name,
-                    "rep_address": self._rep_addr,
-                    "pub_address": self._pub_addr
-                    }
-            client.heartbeat(info)                
-            # make it exit faster
-            s = time.time()
-            while time.time() - s < REGISTRY_HEARTBEAT:
-                time.sleep(0.5)
-                if self.stop_event.isSet():
-                    break
-            #except Exception as e:
-            #    print('Error in registry_heartbeat: ', e)
-            #    pass
+            try:
+                info = {
+                        "name": self._name,
+                        "rep_address": self._rep_addr,
+                        "pub_address": self._pub_addr
+                        }
+                client.heartbeat(info)                
+                # make it exit faster
+                s = time.time()
+                while time.time() - s < REGISTRY_HEARTBEAT:
+                    time.sleep(0.5)
+                    if self.stop_event.isSet():
+                        break
+            except Exception as e:
+                print('Error in registry_heartbeat: ', e)
+                                
         client.close()
-        print('registry_heartbeat client close ')
 
     def publish(self, topic:str, msg:str):
         if not isinstance(msg, str):
