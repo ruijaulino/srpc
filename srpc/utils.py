@@ -9,6 +9,13 @@ from multiprocessing import Process# , Queue
 import queue
 from queue import Queue
 
+
+OK_STATUS = 'ok'
+ERROR_STATUS = 'error'
+
+def build_server_response(status:str, output, error_msg:str):
+    return {'status':status, 'output':output, 'error_msg':error_msg}
+
 # class to build topic string
 class SRPCTopic:
     

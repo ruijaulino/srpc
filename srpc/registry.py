@@ -6,15 +6,16 @@ import datetime as dt
 import os
 try:
     from .utils import clear_screen
+    from .server import SRPCServer
     from .custom_zmq import ZMQR, ZMQP
 except ImportError:
     from utils import clear_screen
+    from server import SRPCServer
     from custom_zmq import ZMQR, ZMQP
 try:
     from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 except ImportError:
     from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
-
 
 class SRPCRegistry:
     def __init__(self, addr:str = None, timeo:int = 10):
@@ -85,7 +86,77 @@ class SRPCRegistry:
                 break
         self.close()      
 
+# new version with a service
+
+
+class Registry(SRPCServer):
+    def __init__(self, rep_addr:str, service_name:str = "Registry"):        
+        
+        SRPCServer.__init__(
+                            self, 
+                            name = service_name, 
+                            rep_addr = rep_addr,
+                            pub_addr = None, # does not need publisher
+                            registry_addr = None, # do not pass it because we are the registry
+                            timeo = 1, 
+                            n_workers = 1, 
+                            thread_safe = False, 
+                            lvc = True,
+                            clear_screen = True
+                            )
+        
+        self.services = {}
+        self.th = None
+
+    def _screen(self):
+        while not self.stop_event.isSet():                                    
+            
+            clear_screen()            
+            
+            print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self._rep_addr} ")
+            print()
+            for name, info in self.services.items():
+                print(f">> SERVICE {name} | ACCEPT REQ ON {info.get('rep_address')} | PUB ON {info.get('pub_address')}]") 
+
+            t = time.time()
+            n_del = []
+            for name, service in self.services.items():
+                if t - service["last_heartbeat"] > REGISTRY_HEARTBEAT*2: n_del.append(name)
+            for n in n_del: del self.services[n]  
+            time.sleep(2)
+
+    def heartbeat(self, info:dict = {}):
+        '''
+        stores a heartbeat from a client
+        info: dict
+            {'name':'','rep_address':'', 'pub_address':''}
+        '''
+        self.services[info.get("name", "unk")] = {
+                                                "rep_address": info.get("rep_address",'unk'),
+                                                "pub_address": info.get("pub_address",'unk'),
+                                                "last_heartbeat": time.time(),
+                                                "ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                }
+        return 1
+
+    def services(self):
+        return self.services
+
+    def start(self):
+        self.th = threading.Thread(target = self._screen, daemon = True)
+        self.th.start()
+
+    def close(self):
+        self._close()
+        self.th.join()
+
+
 if __name__ == "__main__":
-    registry = SRPCRegistry()
+    REGISTRY_HOST = '192.168.2.152'
+    REGISTRY_PORT = 4000
+    REGISTRY_ADDR = f"tcp://{REGISTRY_HOST}:{REGISTRY_PORT}"
+
+    registry = Registry(REGISTRY_ADDR)
     registry.serve()
     
+

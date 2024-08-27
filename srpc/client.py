@@ -4,16 +4,16 @@ import time
 
 try:
     from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
-    from .server import build_server_response, OK_STATUS, ERROR_STATUS
+    from .utils import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
 except ImportError:
     from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
-    from server import build_server_response, OK_STATUS, ERROR_STATUS
+    from utils import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG
 
 
 class SRPCClient:
-    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
+    def __init__(self, req_addr:str, sub_addr:str = False, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
         self._req_addr = req_addr
         self._sub_addr = sub_addr
         self._timeo = timeo
@@ -26,20 +26,26 @@ class SRPCClient:
         self.req_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
         self.req_socket.connect(self._req_addr)
         
-        self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
-        self.sub_socket.connect(self._sub_addr)
+        self.sub_socket = None
+        if self._sub_addr:
+            self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
+            self.sub_socket.connect(self._sub_addr)
 
     def close(self):
         self.req_socket.close()
-        self.sub_socket.close()
+        if self.sub_socket: self.sub_socket.close()
         self.ctx.term()
 
     def subscribe(self, topic:str):
         self.sub_socket.subscribe(topic)
 
     def listen(self):
-        topic, msg = self.sub_socket.recv()
-        return topic, msg
+        if self.sub_socket:
+            topic, msg = self.sub_socket.recv()
+            return topic, msg
+        else:
+            print('Trying to listen on a client without a defined subscriber')
+            return None, None
 
     def call(self, method, args = [], kwargs = {}, close = False):
         req = {

@@ -22,7 +22,7 @@ except ImportError:
 # clocks are published with the topic
 # SRPCTopic('trigger', 'clock', tz, hour, minute, 'offset'+str(offset))
 class Triggers(SRPCServer):
-    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = REGISTRY_ADDR, minute_clocks_tz:list = [], offsets:list = [], service_name:str = 'Triggers'):                
+    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = None, minute_clocks_tz:list = [], offsets:list = [], service_name:str = 'Triggers'):                
         SRPCServer.__init__(
                             self, 
                             name = service_name, 

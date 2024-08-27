@@ -18,7 +18,7 @@ except ImportError:
 
 
 class Store(SRPCServer):
-    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = REGISTRY_ADDR, service_name:str = "Store", filename:str = 'store.pkl'):
+    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = None, service_name:str = "Store", filename:str = 'store.pkl'):
         
         SRPCServer.__init__(
                             self, 

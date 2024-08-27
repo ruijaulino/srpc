@@ -7,30 +7,26 @@ import string
 
 try:
     from .utils import SRPCTopic, clear_screen
+    from .utils import build_server_response, OK_STATUS, ERROR_STATUS
+    from .registry_client import RegistryClient
     from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, generate_random_string
 except ImportError:
-    from utils import SRPCTopic, clear_screen
+    from utils import SRPCTopic, clear_screen, build_server_response
+    from utils import build_server_response, OK_STATUS, ERROR_STATUS
+    from registry_client import RegistryClient
     from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, generate_random_string
+
 try:
     from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 except ImportError:
     from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
-
-# function to build a response from the server
-# easier to check how the server responds
-
-OK_STATUS = 'ok'
-ERROR_STATUS = 'error'
-
-def build_server_response(status:str, output, error_msg:str):
-    return {'status':status, 'output':output, 'error_msg':error_msg}
 
 class SRPCServer:
     def __init__(
                 self, 
                 name:str, 
                 rep_addr:str,
-                pub_addr:str,
+                pub_addr:str = None,
                 registry_addr:str = None,
                 timeo:int = 1, 
                 n_workers:int = 1, 
@@ -41,7 +37,7 @@ class SRPCServer:
         self._name = name
         self._rep_addr = rep_addr
         self._pub_addr = pub_addr
-        self._registry_addr = registry_addr if registry_addr else REGISTRY_ADDR
+        self._registry_addr = registry_addr
         self._lvc = lvc
         self._timeo = timeo
         self._clear_screen = clear_screen
@@ -50,8 +46,13 @@ class SRPCServer:
         self.ctx = zmq.Context.instance()
         self.stop_event = threading.Event()  
 
-        self._pub_socket = ZMQP(ctx = self.ctx, lvc = self._lvc, timeo = self._timeo)
-        self._pub_socket.bind(self._pub_addr)
+        print(self._pub_addr)
+
+        if self._pub_addr:
+            self._pub_socket = ZMQP(ctx = self.ctx, lvc = self._lvc, timeo = self._timeo)
+            self._pub_socket.bind(self._pub_addr)
+        else:
+            self._pub_socket = None
 
         self._functions = {}
         self._classes = {}
@@ -68,23 +69,15 @@ class SRPCServer:
         self._worker_addr = "inproc://"+generate_random_string(8)
 
     def registry_heartbeat(self):
-
-        self._registry_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
-        self._registry_socket.connect(self._registry_addr)
-
+        client = RegistryClient(req_addr = self._registry_addr)
         while not self.stop_event.isSet(): 
             try:
-                req = {
-                    "action": "heartbeat",
-                    "info": {
+                info = {
                         "name": self._name,
                         "rep_address": self._rep_addr,
                         "pub_address": self._pub_addr
-                    }
-                }
-                status = self._registry_socket.send(json.dumps(req))
-                if status == 1:
-                    rep = self._registry_socket.recv()
+                        }
+                client.heartbeat(info)                
                 # make it exit faster
                 s = time.time()
                 while time.time() - s < REGISTRY_HEARTBEAT:
@@ -94,7 +87,8 @@ class SRPCServer:
             except Exception as e:
                 print('Error in registry_heartbeat: ', e)
                 pass
-        self._registry_socket.close()
+
+        client.close()
 
     def publish(self, topic:str, msg:str):
         if not isinstance(msg, str):
@@ -103,7 +97,10 @@ class SRPCServer:
             except:
                 print('could not cast msg to publish into string')    
                 msg = None
-        if msg: self._pub_socket.publish(topic = topic, msg = msg)
+        if self._pub_socket:
+            if msg: self._pub_socket.publish(topic = topic, msg = msg)
+        else:
+            print('Trying to publish in a service without publisher defined!')
 
     def register_function(self, func, name=None):
         if name is None:
@@ -194,9 +191,10 @@ class SRPCServer:
 
         print(f"Server {self._name} running")
         
-        # start registry communications
-        self._reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
-        self._reg_th.start()
+        # start registry communications if the address is defined
+        if self._registry_addr:        
+            self._reg_th = threading.Thread(target = self.registry_heartbeat, daemon = True)
+            self._reg_th.start()
                 
         # start queue to distribute work
         self._req_queue = ZMQReliableQueue(ctx = self.ctx, client_addr = self._rep_addr, worker_addr = self._worker_addr)
@@ -236,9 +234,11 @@ class SRPCServer:
             worker.join()
         print(f'Server {self._name} stopping request queue')        
         self._req_queue.stop()
-        print(f'Server {self._name} joining registry')
-        self._reg_th.join()        
-        self._pub_socket.close()
+        # better check from the thread object
+        if self._reg_th:
+            print(f'Server {self._name} joining registry')
+            self._reg_th.join()                
+        self._pub_socket: self._pub_socket.close()
         self.ctx.term()
         print(f"Server {self._name} closed")
 
