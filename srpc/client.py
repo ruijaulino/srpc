@@ -21,7 +21,9 @@ class SRPCClient:
         self._no_rep_msg = no_rep_msg if no_rep_msg else NO_REP_MSG
         self._no_req_msg = no_req_msg if no_req_msg else NO_REQ_MSG
         
-        self.ctx = zmq.Context.instance()
+        # it is better that the clients create their own, non shared context, in order to be able to use
+        # clients inside other SRPCServer's
+        self.ctx = zmq.Context()
         
         self.req_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
         self.req_socket.connect(self._req_addr)
@@ -31,14 +33,14 @@ class SRPCClient:
             self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
             self.sub_socket.connect(self._sub_addr)
 
-    def close(self, term = True):
+    def close(self):
         # if the client (or some class that inherits from SRPCClient) 
         # is being used where another shared context exits, then we must take
         # case not to terminate the context here as it may break the code 
         # when we try to close it!
         self.req_socket.close()
         if self.sub_socket: self.sub_socket.close()
-        if term: self.ctx.term()
+        self.ctx.term()
 
     def subscribe(self, topic:str):
         if self.sub_socket:

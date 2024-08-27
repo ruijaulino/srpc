@@ -547,10 +547,12 @@ class ZMQP:
         sub_socket = self.ctx.socket(zmq.SUB)
         sub_socket.connect(self._inproc_addr)
         sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        
+        sub_socket.setsockopt(zmq.LINGER, 0)
+
         # comm with exterior is made with a xpub
         xpub_socket = self.ctx.socket(zmq.XPUB) 
         xpub_socket.bind(self.addr)        
+        xpub_socket.setsockopt(zmq.LINGER, 0)
         # this flag is needed otherwise the xpub will not receive repeated topics sub request
         # and we cannot reroute the last message
         xpub_socket.setsockopt(zmq.XPUB_VERBOSE, True) 
@@ -591,6 +593,7 @@ class ZMQP:
     def bind(self, addr:str = None):
         self.addr = addr
         self.socket = self.ctx.socket(zmq.PUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         if self.lvc:
             # sockets binds to a random address inproc
             self.socket.bind(self._inproc_addr)
@@ -623,6 +626,7 @@ class ZMQS:
     def connect(self, addr:str = None):
         self.addr = addr
         self.socket = self.ctx.socket(zmq.SUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
 
