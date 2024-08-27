@@ -32,7 +32,10 @@ if __name__ == "__main__":
     REGISTRY_PORT = 4000
     REGISTRY_ADDR = f"tcp://{REGISTRY_HOST}:{REGISTRY_PORT}"
 
-    registry = Registry(REGISTRY_ADDR)
-    registry.serve()
+    client = RegistryClient(REGISTRY_ADDR)
+    out = client.services()
+    print(out)
+    client.close()
+
     
 

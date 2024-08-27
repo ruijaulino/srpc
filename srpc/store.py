@@ -118,7 +118,7 @@ class Store(SRPCServer):
                 del self.store[key]
     
 class StoreClient(SRPCClient):
-    def __init__(self, req_addr:str, sub_addr:str, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):        
+    def __init__(self, req_addr:str, sub_addr:str = None, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):        
         SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
 
     def clear(self):

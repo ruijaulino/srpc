@@ -37,7 +37,11 @@ class SRPCClient:
         self.ctx.term()
 
     def subscribe(self, topic:str):
-        self.sub_socket.subscribe(topic)
+        if self.sub_socket:
+            self.sub_socket.subscribe(topic)
+        else:
+            print('Trying to subscribe on a client without a defined subscriber')
+            return None, None
 
     def listen(self):
         if self.sub_socket:

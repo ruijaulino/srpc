@@ -105,7 +105,7 @@ class Registry(SRPCServer):
                             clear_screen = True
                             )
         
-        self.services = {}
+        self._services = {}
         self.th = None
 
     def _screen(self):
@@ -115,14 +115,14 @@ class Registry(SRPCServer):
             
             print(f"[{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SRPC REGISTRY on {self._rep_addr} ")
             print()
-            for name, info in self.services.items():
+            for name, info in self._services.items():
                 print(f">> SERVICE {name} | ACCEPT REQ ON {info.get('rep_address')} | PUB ON {info.get('pub_address')}]") 
 
             t = time.time()
             n_del = []
-            for name, service in self.services.items():
+            for name, service in self._services.items():
                 if t - service["last_heartbeat"] > REGISTRY_HEARTBEAT*2: n_del.append(name)
-            for n in n_del: del self.services[n]  
+            for n in n_del: del self._services[n]  
             time.sleep(2)
 
     def heartbeat(self, info:dict = {}):
@@ -131,7 +131,7 @@ class Registry(SRPCServer):
         info: dict
             {'name':'','rep_address':'', 'pub_address':''}
         '''
-        self.services[info.get("name", "unk")] = {
+        self._services[info.get("name", "unk")] = {
                                                 "rep_address": info.get("rep_address",'unk'),
                                                 "pub_address": info.get("pub_address",'unk'),
                                                 "last_heartbeat": time.time(),
@@ -140,7 +140,7 @@ class Registry(SRPCServer):
         return 1
 
     def services(self):
-        return self.services
+        return self._services
 
     def start(self):
         self.th = threading.Thread(target = self._screen, daemon = True)
