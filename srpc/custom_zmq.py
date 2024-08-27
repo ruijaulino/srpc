@@ -634,7 +634,7 @@ class ZMQS:
         self.socket.unsubscribe(topic.encode())
 
     def subscribe(self, topic:str = ''):
-        self.socket.subscribe(''.encode())
+        self.socket.subscribe(topic.encode())
     
     def recv(self):
         if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
