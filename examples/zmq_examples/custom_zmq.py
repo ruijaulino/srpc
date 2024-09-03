@@ -9,8 +9,16 @@ from collections import OrderedDict
 
 # default message to use in Queue to signal the worker is ready
 COMM_ALIVE = "\x01"
+
+COMM_HEADER_WORKER = "W"
+COMM_HEADER_CLIENT = "C"
+COMM_TYPE_HEARTBEAT = "H"
+COMM_TYPE_REP = "REP"
+COMM_TYPE_REQ = "REQ"
+COMM_MSG_HEARTBEAT = ""
+
+
 COMM_HEARTBEAT_INTERVAL = 5
-# COMM_TOPIC_ALL = '0all'
 ENCODING = 'utf-8' #'Windows-1252'
 
 def generate_random_string(n):
@@ -65,25 +73,29 @@ class ZMQR:
     def connect(self, addr:str = None):
         self._connect(addr)
 
-    def _encode_msg(self, msg):
+    def _encode(self, msg):
         '''
         msg: str or list of strings
         '''
-
-        enc_msg = "\x01".encode()
         if isinstance(msg, str):
-            enc_msg = msg.encode()
-        elif isinstance(msg, list):
-            enc_msg = []
-            for e in msg: 
-                if isinstance(e, str):
-                    e = e.encode()
-                enc_msg.append(e)
+            return msg.encode()
         else:
-            enc_msg = msg
-        return enc_msg   
+            return [e.encode() for e in msg]
 
-    def _decode_msg(self, msg):
+        # enc_msg = "\x01".encode()
+        # if isinstance(msg, str):
+        #     enc_msg = msg.encode()
+        # elif isinstance(msg, list):
+        #     enc_msg = []
+        #     for e in msg: 
+        #         if isinstance(e, str):
+        #             e = e.encode()
+        #         enc_msg.append(e)
+        # else:
+        #     enc_msg = msg
+        # return enc_msg   
+
+    def _decode(self, msg):
         '''
         msg: str or list of strings
         Note: when we are controling the envelope, zmq can attribute
@@ -91,18 +103,23 @@ class ZMQR:
         we do the try/except here. other solution to avoid this would be to force
         all clients to have an identity (random one)
         '''
-        dec_msg = ""
         if isinstance(msg, bytes):
-            dec_msg = msg.decode()
-        elif isinstance(msg, list):
-            dec_msg = []
-            for e in msg: 
-                if isinstance(e, bytes):
-                    e = e.decode()
-                dec_msg.append(e)
+            return msg.decode()
         else:
-            dec_msg = msg
-        return dec_msg   
+            return [e.decode() for e in msg]
+
+        # dec_msg = ""
+        # if isinstance(msg, bytes):
+        #     dec_msg = msg.decode()
+        # elif isinstance(msg, list):
+        #     dec_msg = []
+        #     for e in msg: 
+        #         if isinstance(e, bytes):
+        #             e = e.decode()
+        #         dec_msg.append(e)
+        # else:
+        #     dec_msg = msg
+        # return dec_msg   
 
     def _reconnect(self):
         if self.binded:
@@ -117,7 +134,7 @@ class ZMQR:
         timeo = int(1000*timeo) if timeo else self.timeo
         # check if we can send - make poll with a timeout for the operation to write
         if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
-            self.socket.send(self._encode_msg(msg))
+            self.socket.send(self._encode(msg))
             return 1
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type == zmq.REP:
@@ -131,7 +148,7 @@ class ZMQR:
         timeo = int(1000*timeo) if timeo else self.timeo
         # check if we can send - make poll with a timeout for the operation to write
         if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
-            self.socket.send_multipart(self._encode_msg(msg))
+            self.socket.send_multipart(self._encode(msg))
             return 1
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type == zmq.REP:
@@ -142,7 +159,7 @@ class ZMQR:
         timeo = int(1000*timeo) if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
             msg = self.socket.recv()
-            msg = self._decode_msg(msg)
+            msg = self._decode(msg)
             return msg
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type in [zmq.REQ, zmq.DEALER]:
@@ -153,7 +170,7 @@ class ZMQR:
         timeo = int(1000*timeo) if timeo else self.timeo
         if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
             msg = self.socket.recv_multipart()
-            msg = self._decode_msg(msg)
+            msg = self._decode(msg)
             return msg
         # reset the state to be able to send again if zmq.REQ
         if self.zmq_type in [zmq.REQ, zmq.DEALER]:
@@ -419,7 +436,10 @@ class ZMQReliableQueue:
             except Exception as e:
                 print('ZMQQueue thread error : ', e)
                 if self.standalone: 
-                    break            
+                    break      
+        frontend.close()
+        backend.close()
+
     def stop(self):
         '''
         stops the queue
@@ -545,10 +565,12 @@ class ZMQP:
         sub_socket = self.ctx.socket(zmq.SUB)
         sub_socket.connect(self._inproc_addr)
         sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        
+        sub_socket.setsockopt(zmq.LINGER, 0)
+
         # comm with exterior is made with a xpub
         xpub_socket = self.ctx.socket(zmq.XPUB) 
         xpub_socket.bind(self.addr)        
+        xpub_socket.setsockopt(zmq.LINGER, 0)
         # this flag is needed otherwise the xpub will not receive repeated topics sub request
         # and we cannot reroute the last message
         xpub_socket.setsockopt(zmq.XPUB_VERBOSE, True) 
@@ -589,6 +611,7 @@ class ZMQP:
     def bind(self, addr:str = None):
         self.addr = addr
         self.socket = self.ctx.socket(zmq.PUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         if self.lvc:
             # sockets binds to a random address inproc
             self.socket.bind(self._inproc_addr)
@@ -621,6 +644,7 @@ class ZMQS:
     def connect(self, addr:str = None):
         self.addr = addr
         self.socket = self.ctx.socket(zmq.SUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
 
@@ -628,7 +652,7 @@ class ZMQS:
         self.socket.unsubscribe(topic.encode())
 
     def subscribe(self, topic:str = ''):
-        self.socket.subscribe(''.encode())
+        self.socket.subscribe(topic.encode())
     
     def recv(self):
         if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:

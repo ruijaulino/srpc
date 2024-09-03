@@ -9,7 +9,7 @@ REQUEST_RETRIES = 3
 
 addr = "tcp://127.0.0.1:5555"
 ctx = zmq.Context()
-s = custom_zmq.ZMQR(ctx, zmq.REQ, timeo = REQUEST_TIMEOUT, identity = 'iamclient')
+s = custom_zmq.ZMQR(ctx, zmq.REQ, timeo = REQUEST_TIMEOUT)
 s.connect(addr)
 
 abort = False
