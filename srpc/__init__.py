@@ -1,4 +1,6 @@
 from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
+from .routers import proxy, services_broker
+
 from .registry import SRPCRegistry, Registry
 from .registry_client import RegistryClient
 from .server import SRPCServer
