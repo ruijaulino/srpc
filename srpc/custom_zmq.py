@@ -747,7 +747,7 @@ class ZMQPub:
         self.socket = self.ctx.socket(zmq.PUB)
         self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.connect(self.addr)
-        time.sleep(1) # make sure all connections have time to be established
+        # time.sleep(1) # make sure all connections have time to be established
     
     def publish(self, topic:str, msg:str):        
         if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
@@ -770,7 +770,7 @@ class ZMQSub:
         self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
-        time.sleep(1) # make sure all connections have time to be established
+        # time.sleep(1) # make sure all connections have time to be established
 
     def unsubscribe(self, topic:str):
         self.socket.unsubscribe(topic.encode())
@@ -896,7 +896,7 @@ class ZMQServiceBroker:
 
     def require_service(self, service:str):
         if not self.has_service(service):        
-            print(f"Registering service {service}")    
+            # print(f"Registering service {service}")    
             self.services[service] = ZMQServiceBrokerService(service)
         return self.services[service]
 
@@ -912,7 +912,7 @@ class ZMQServiceBroker:
         # to create services on client requests 
         if not self.create_service_on_client:
             for name in to_del: 
-                print(f"Unegistering service {name} because there are no workers left")    
+                # print(f"Unegistering service {name} because there are no workers left")    
                 self.services.pop(name)
 
     def dispatch(self, service:ZMQServiceBrokerService, msg:str = None):
@@ -1092,8 +1092,6 @@ class ZMQServiceBrokerWorker(ZMQR):
         return self.send_multipart(['',COMM_HEADER_WORKER, COMM_TYPE_REP, self.service, clientid, msg])
 
 
-
-
 class ZMQServiceBrokerClient(ZMQR):
     # should always receive and send in multipart because the queue need to handle the envelope
     def __init__(self, ctx:zmq.Context):
@@ -1119,6 +1117,12 @@ class ZMQServiceBrokerClient(ZMQR):
         self._connect(addr)
         print(f"Client to service queue {self.identity} ready")
         
+    def send_request(self, service:str, msg:str, timeo:int = None):
+        return self.send_multipart([COMM_HEADER_CLIENT, service, msg], timeo = timeo)
+
+    def recv_reply(self, timeo = None):
+        return self.recv(timeo = timeo) 
+
     def request(self, service:str, msg:str):
         '''
         make a request to the queue

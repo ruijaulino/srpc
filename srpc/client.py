@@ -3,19 +3,21 @@ import json
 import time
 
 try:
-    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
+    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQSub, ZMQServiceBrokerClient
     from .utils import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
+    from .defaults import SERVICES_BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 except ImportError:
-    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQS
+    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQSub, ZMQServiceBrokerClient
     from utils import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG
-
+    from defaults import SERVICES_BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 
 class SRPCClient:
-    def __init__(self, req_addr:str, sub_addr:str = False, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
-        self._req_addr = req_addr
-        self._sub_addr = sub_addr
+    def __init__(self, broker_addr:str = None, proxy_sub_addr:str = None, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
+        
+        self._broker_addr = broker_addr if broker_addr else SERVICES_BROKER_ADDR
+        self._proxy_sub_addr = proxy_sub_addr if proxy_sub_addr else PROXY_SUB_ADDR
         self._timeo = timeo
         self._last_msg_only = last_msg_only
         self._no_rep_msg = no_rep_msg if no_rep_msg else NO_REP_MSG
@@ -25,39 +27,37 @@ class SRPCClient:
         # clients inside other SRPCServer's
         self.ctx = zmq.Context()
         
-        self.req_socket = ZMQR(ctx = self.ctx, zmq_type = zmq.REQ, timeo = self._timeo)
-        self.req_socket.connect(self._req_addr)
+        self._broker_client = ZMQServiceBrokerClient(self.ctx)
+        self._broker_client.connect(self._broker_addr)
         
-        self.sub_socket = None
-        if self._sub_addr:
-            self.sub_socket = ZMQS(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
-            self.sub_socket.connect(self._sub_addr)
+        self._proxy_sub = ZMQSub(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
+        self._proxy_sub.connect(self._proxy_sub_addr)
 
     def close(self):
         # if the client (or some class that inherits from SRPCClient) 
         # is being used where another shared context exits, then we must take
         # case not to terminate the context here as it may break the code 
         # when we try to close it!
-        self.req_socket.close()
-        if self.sub_socket: self.sub_socket.close()
+        self._broker_client.close()
+        self._proxy_sub.close()
         self.ctx.term()
 
     def subscribe(self, topic:str):
-        if self.sub_socket:
-            self.sub_socket.subscribe(topic)
+        if self._proxy_sub:
+            self._proxy_sub.subscribe(topic)
         else:
             print('Trying to subscribe on a client without a defined subscriber')
             return None, None
 
     def listen(self):
-        if self.sub_socket:
-            topic, msg = self.sub_socket.recv()
+        if self._proxy_sub:
+            topic, msg = self._proxy_sub.recv()
             return topic, msg
         else:
             print('Trying to listen on a client without a defined subscriber')
             return None, None
 
-    def call(self, method, args = [], kwargs = {}, close = False):
+    def call(self, service, method, args = [], kwargs = {}, close:bool = False):
         req = {
                 "method": method,
                 "args": args,
@@ -65,11 +65,16 @@ class SRPCClient:
             }
         req = json.dumps(req)
         # Send the request
-        status = self.req_socket.send(req)
+        status = self._broker_client.send_request(service = service, msg = req, timeo = self._timeo)
         if status == 1:
-            rep = self.req_socket.recv()
+            rep = self._broker_client.recv_reply(timeo = self._timeo)
+            
+            # print(rep)
             if rep is not None:                
-                rep = json.loads(rep)
+                if rep != "ERROR":
+                    rep = json.loads(rep)
+                else:
+                    rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self._no_rep_msg)    
             else:
                 # this should emulate the response from the server
                 rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self._no_rep_msg)
@@ -87,18 +92,18 @@ class SRPCClient:
         else:
             return rep.get('error_msg')
 
-    def invoque(self, method, args = [], kwargs = {}, close = False):
+    def invoque(self, service, method, args = [], kwargs = {}, close = False):
         return self.parse(self.call(method, args, kwargs, close))
 
 def test_client():
-    client = SRPCClient(req_addr = "tcp://127.0.0.1:5557", sub_addr = "tcp://127.0.0.1:5558")
+    client = SRPCClient()
     
-    print(client.call("add", kwargs = {"a":1,"b":2}))  # Output: {'result': 3}
-    print(client.call("subtract", [10, 43]))  # Output: {'result': -33}
-    print(client.call("multiply", [2, 3]))  # Output: {'error': 'Unknown method: multiply'}
-    print(client.call("ExampleClass.multiply", [3, 4]))  # Output: {'result': 12}
-    print(client.call("Store.set", ["ola", 1]))  # Output: {'result': 12}
-    print(client.call("Store.get", ["ola"]))  # Output: {'result': 12}
+    print(client.call("test_server","add", kwargs = {"a":1,"b":2}))  # Output: {'result': 3}
+    print(client.call("test_server","subtract", [10, 43]))  # Output: {'result': -33}
+    print(client.call("test_server","multiply", [2, 3]))  # Output: {'error': 'Unknown method: multiply'}
+    print(client.call("test_server","ExampleClass.multiply", [3, 4]))  # Output: {'result': 12}
+    print(client.call("test_server","Store.set", ["ola", 1]))  # Output: {'result': 12}
+    print(client.call("test_server","Store.get", ["ola"]))  # Output: {'result': 12}
 
 if __name__ == "__main__":
 
