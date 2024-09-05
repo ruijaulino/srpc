@@ -16,20 +16,22 @@ except ImportError:
     from client import SRPCClient
     from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
+try:
+    from .defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
+except ImportError:
+    from defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 
 class Store(SRPCServer):
-    def __init__(self, rep_addr:str, pub_addr:str, registry_addr:str = None, service_name:str = "Store", filename:str = 'store.pkl'):
+    def __init__(self, broker_addr:str = None, proxy_sub_addr:str = None, registry_addr:str = None, service_name:str = "Store", filename:str = 'store.pkl'):
         
         SRPCServer.__init__(
                             self, 
                             name = service_name, 
-                            rep_addr = rep_addr,
-                            pub_addr = pub_addr,
-                            registry_addr = registry_addr,
+                            broker_addr = broker_addr,
+                            proxy_sub_addr = proxy_sub_addr,
                             timeo = 1, 
                             n_workers = 1, 
                             thread_safe = False, 
-                            lvc = True,
                             clear_screen = True
                             )
 
@@ -118,37 +120,42 @@ class Store(SRPCServer):
                 del self.store[key]
     
 class StoreClient(SRPCClient):
-    def __init__(self, req_addr:str, sub_addr:str = None, timeo:int = 1, last_msg_only:bool = True, no_rep_msg = NO_REP_MSG, no_req_msg = NO_REQ_MSG):        
-        SRPCClient.__init__(self, req_addr = req_addr, sub_addr = sub_addr, timeo = timeo, last_msg_only = last_msg_only, no_rep_msg = no_rep_msg, no_req_msg = no_req_msg)
+    def __init__(self, srpc_client:SRPCClient, service_name:str = 'Store', timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):        
+        self.service_name = service_name
+        self.srpc_client = srpc_client
+        if no_rep_msg: self.srpc_client.no_rep_msg = no_rep_msg
+        if no_req_msg: self.srpc_client.no_req_msg = no_req_msg
 
     def clear(self):
-        return self.invoque(method = 'clear', args = [], kwargs = {}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'clear', args = [], kwargs = {}, close = False)
 
     def delete(self, key):
-        return self.invoque(method = 'delete', args = [], kwargs = {'key':key}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'delete', args = [], kwargs = {'key':key}, close = False)
 
     def keys(self):
-        return self.invoque(method = 'keys', args = [], kwargs = {}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'keys', args = [], kwargs = {}, close = False)
 
     def sget(self, key, sub_key = None):
-        return self.invoque(method = 'sget', args = [], kwargs = {'key':key, 'sub_key': sub_key}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'sget', args = [], kwargs = {'key':key, 'sub_key': sub_key}, close = False)
 
     def get(self, *keys):
-        return self.invoque(method = 'get', args = keys, kwargs = {}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'get', args = keys, kwargs = {}, close = False)
         
     def set(self, key, value):
-        return self.invoque(method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'set', args = [], kwargs = {'key':key, 'value':value}, close = False)
 
     def publish(self, topic:str, msg:str):
-        return self.invoque(method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
+        return self.srpc_client.invoque(service = self.service_name, method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
         
 def test_server():
-    server = Store(service_name = 'store', rep_addr = "tcp://127.0.0.1:5551", pub_addr = "tcp://127.0.0.1:5552", registry_addr = REGISTRY_ADDR)  
+    server = Store(service_name = 'Store')  
     server.serve()
 
 def test_client():
    
-    client = StoreClient(req_addr = "tcp://127.0.0.1:5551", sub_addr = "tcp://127.0.0.1:5552")
+    srpc_client = SRPCClient()
+
+    client = StoreClient(srpc_client)
     print(client.clear())
     print(client.set('ola',1))
     print(client.get('ola'))
@@ -165,9 +172,9 @@ def test_client():
     print(client.get('d0','b','d12'))
     print()
 
-    client.close()
+    srpc_client.close()
    
 
 if __name__ == "__main__":
-    test_server()
-    # test_client()
+    # test_server()
+    test_client()

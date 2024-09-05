@@ -17,9 +17,9 @@ except ImportError:
     from custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string
 
 try:
-    from .defaults import SERVICES_BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
+    from .defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 except ImportError:
-    from defaults import SERVICES_BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
+    from defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 
 class SRPCServer:
     def __init__(
@@ -34,7 +34,7 @@ class SRPCServer:
                 ):
         self._name = name        
         
-        self._broker_addr = broker_addr if broker_addr else SERVICES_BROKER_ADDR
+        self._broker_addr = broker_addr if broker_addr else BROKER_ADDR
 
         self._proxy_sub_addr = proxy_sub_addr if proxy_sub_addr else PROXY_SUB_ADDR
         
@@ -58,7 +58,7 @@ class SRPCServer:
 
         self._workers = []
         # self._reg_th = None
-        self._req_queue = None
+        # self._req_queue = None
         
         # build workers addr
         # self._worker_addr = "inproc://"+generate_random_string(8)
@@ -219,7 +219,7 @@ class SRPCServer:
         for worker in self._workers:
             worker.join()
         print(f'Server {self._name} stopping request queue')        
-        self._req_queue.stop()
+        # self._req_queue.stop()
         # better check from the thread object
         #if self._reg_th:
         #    print(f'Server {self._name} joining registry')

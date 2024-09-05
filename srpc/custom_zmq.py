@@ -31,6 +31,10 @@ def create_identity():
     return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
 
 
+def ts():
+    return dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
 # Generic, asynch and stoppable ZMQ REQ/REP socket in a wrapper
 class ZMQR:
     def __init__(self, ctx:zmq.Context, zmq_type:int, timeo:int = 1, identity:str = None, reconnect:bool = True):
@@ -659,7 +663,7 @@ class ZMQS:
 def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger']):
 
 
-    print(f'Starting Proxy from {sub_addr} to {pub_addr}')
+    print(f'[{ts()}] Starting Proxy from {sub_addr} to {pub_addr}')
 
     ctx = zmq.Context.instance()
 
@@ -720,10 +724,10 @@ def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger']):
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print('Error in proxy: ', e)
+            print(f'[{ts()}] Error in proxy: ', e)
             break
 
-    print(f'Terminating Proxy')
+    print(f'[{ts()}] Terminating Proxy')
     
     # close sockets
     xsub_socket.close()
@@ -790,8 +794,9 @@ class ZMQSub:
 # SERVICES BROKER
 class ZMQServiceBrokerService:
     """a single Service"""
-    def __init__(self, name:str):
+    def __init__(self, name:str, msg_timeo:int = 20):
         self.name = name
+        self.msg_timeo = msg_timeo
         self.requests = [] # requests to the service
         self.workers_address = [] # OrderedDict() # workers queue
         self.workers_expiry = []    
@@ -802,7 +807,7 @@ class ZMQServiceBrokerService:
         return tmp
 
     def add_request(self, msg):
-        self.requests.append(msg)
+        self.requests.append({'msg':msg, 'expiry':time.time()+self.msg_timeo})
 
     def add_worker(self, address):
         # remove if exists
@@ -818,9 +823,19 @@ class ZMQServiceBrokerService:
         return self._pop_worker(0)
 
     def next_request(self):
-        return self.requests.pop(0)
+        return self.requests.pop(0).get('msg')
 
-    def purge(self):
+    
+    def purge_requests(self):
+        new_requests = []
+        for e in self.requests:
+            if time.time() < e.get('expiry'): 
+                new_requests.append(e)
+            else:
+                print(f"[{ts()}] Request to service {self.name} expired | {e.get('msg')}")
+        self.requests = new_requests        
+
+    def purge_workers(self):
         """Look for & kill workers that are not sending heartbeats"""
         t = time.time()
         expired_idx = []
@@ -828,18 +843,23 @@ class ZMQServiceBrokerService:
             if t > e:  # Worker expired
                 expired_idx.append(i)
         for i in expired_idx:
-            print(f"Idle worker {self.workers_address[i]} for service {self.name} expired" )
+            print(f"[{ts()}] Idle worker {self.workers_address[i]} for service {self.name} expired" )
             _ = self._pop_worker(i)
+
+    def purge(self):
+        self.purge_requests()
+        self.purge_workers()
 
     def has_workers(self):
         return len(self.workers_address) > 0
 
     def has_requests(self):
+        # purge requests that are not being served
+        self.purge_requests()
         return len(self.requests) > 0
 
     def has_workers_and_requests(self):
         return self.has_workers() and self.has_requests()
-
 
 class ZMQServiceBroker:
     """
@@ -849,7 +869,7 @@ class ZMQServiceBroker:
     Service Queue routes from clients to the appropriate
         worker and vice verse
     """
-    def __init__(self, addr:str, timeo:int = 1000, create_service_on_client:bool = False):
+    def __init__(self, addr:str, timeo:int = 1000):
         '''
         addr: address where to bind and receive comm from workers and clients
         timeo: timeout for the poller
@@ -864,7 +884,7 @@ class ZMQServiceBroker:
         self.socket.bind(addr)
         # poll timeo
         self.timeo = timeo        
-        self.create_service_on_client = create_service_on_client
+
         self.services = {}
 
 
@@ -896,7 +916,7 @@ class ZMQServiceBroker:
 
     def require_service(self, service:str):
         if not self.has_service(service):        
-            # print(f"Registering service {service}")    
+            print(f"[{ts()}] Registering service {service}")    
             self.services[service] = ZMQServiceBrokerService(service)
         return self.services[service]
 
@@ -910,10 +930,10 @@ class ZMQServiceBroker:
             if not service.has_workers(): to_del.append(name)
         # purge the services without workers left if we are not allowed
         # to create services on client requests 
-        if not self.create_service_on_client:
-            for name in to_del: 
-                # print(f"Unegistering service {name} because there are no workers left")    
-                self.services.pop(name)
+        # if not self.create_service_on_client:
+        # for name in to_del: 
+        #     print(f"Unegistering service {name} because there are no workers left")    
+        #     self.services.pop(name)
 
     def dispatch(self, service:ZMQServiceBrokerService, msg:str = None):
         """Dispatch requests to waiting workers as possible"""
@@ -927,7 +947,7 @@ class ZMQServiceBroker:
             self.send([address, COMM_TYPE_REQ]+msg)
 
     def serve(self):
-        print(f'Starting ZMQServiceBroker on {self.addr}')
+        print(f'[{ts()}] Starting ZMQServiceBroker on {self.addr}')
         while True:
             try:
                 msg = self.recv()
@@ -954,12 +974,14 @@ class ZMQServiceBroker:
                             # add sender to msg
                             msg = [sender, msg]
                             # dispatch to service
-                            if not self.create_service_on_client and not self.has_service(service):
-                                self.send([sender, '', 'ERROR'])
-                            else:
-                                self.dispatch(self.require_service(service), msg)                    
+                            self.dispatch(self.require_service(service), msg)
+
+                            # if not self.create_service_on_client and not self.has_service(service):
+                            #     self.send([sender, '', 'ERROR'])
+                            # else:
+                            #     self.dispatch(self.require_service(service), msg)                    
                         else:
-                            print("Invalid message from client")
+                            print(f"[{ts()}] Invalid message from client")
 
                     # got a msg from a worker                    
                     elif (header == COMM_HEADER_WORKER):
@@ -988,9 +1010,9 @@ class ZMQServiceBroker:
                                 # add the empty string to match between dealer and req sockets
                                 self.send([msg[0], '', msg[1]])
                             else:
-                                print("Wrong format reply message from worker")                            
+                                print(f"[{ts()}] Wrong format reply message from worker")                            
                         else:
-                            print('Unknown message from worker')
+                            print(f'[{ts()}] Unknown message from worker')
                         # dispatch worker to worker on pending payloads
                         self.dispatch(service)                           
                     else:
@@ -999,16 +1021,16 @@ class ZMQServiceBroker:
                 self.purge()
 
             except KeyboardInterrupt:
-                print('ZMQServiceBroker KeyboardInterrupt. Exit.')
+                print(f'[{ts()}] ZMQServiceBroker KeyboardInterrupt. Exit.')
                 break
             except Exception as e:
-                print('ZMQServiceBroker error: ', e)
+                print(f'[{ts()}] ZMQServiceBroker error: ', e)
                 break # Interrupted
         # close socket
         self.socket.close()
         # destroy context
         self.ctx.destroy()
-        print(f'ZMQServiceBroker on {self.addr} terminated')
+        print(f'[{ts()}] ZMQServiceBroker on {self.addr} terminated')
 
 
 class ZMQServiceBrokerWorker(ZMQR):
@@ -1038,7 +1060,7 @@ class ZMQServiceBrokerWorker(ZMQR):
         self.set_identity(create_identity())
         # use the private method
         self._connect(addr)
-        print(f"Service {self.service} worker {self.identity} ready")
+        print(f"[{ts()}] Service {self.service} worker {self.identity} ready")
         self.ping_t = time.time()
         self.pong_t = time.time()
         self.queue_alive = False
@@ -1069,16 +1091,16 @@ class ZMQServiceBrokerWorker(ZMQR):
             elif comm_type == COMM_TYPE_HEARTBEAT:
                 msg = msg.pop(0)
                 if msg != COMM_MSG_HEARTBEAT:
-                    print(f"Unknown heartbeat message from queue")                
+                    print(f"[{ts()}] Unknown heartbeat message from queue")                
                 msg, clientid = None, None
             else:
                 # received a pong/other message with a unknown format
-                print(f"Unknown message format from queue")
+                print(f"[{ts()}] Unknown message format from queue")
                 msg, clientid = None, None
 
         # queue is not responding condition
         if not self.queue_alive and (time.time() - self.pong_t > COMM_HEARTBEAT_INTERVAL):
-            print(f"Queue not responding to worker {self.identity}")
+            print(f"[{ts()}] Queue not responding to worker {self.identity}")
             self.connect()
         else: 
             # signal to the queue that worker is alive by pinging it
@@ -1115,12 +1137,12 @@ class ZMQServiceBrokerClient(ZMQR):
         self.set_identity(create_identity())
         # use the private method
         self._connect(addr)
-        print(f"Client to service queue {self.identity} ready")
+        print(f"[{ts()}] Client to service queue {self.identity} ready")
         
-    def send_request(self, service:str, msg:str, timeo:int = None):
+    def req(self, service:str, msg:str, timeo:int = None):
         return self.send_multipart([COMM_HEADER_CLIENT, service, msg], timeo = timeo)
 
-    def recv_reply(self, timeo = None):
+    def rep(self, timeo = None):
         return self.recv(timeo = timeo) 
 
     def request(self, service:str, msg:str):
