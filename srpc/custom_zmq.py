@@ -660,10 +660,12 @@ class ZMQS:
 
 
 # proxy with last value caching
-def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger']):
+def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger'], stop_event:threading.Event = None):
 
 
     print(f'[{ts()}] Starting Proxy from {sub_addr} to {pub_addr}')
+
+    stop_event = stop_event if stop_event else threading.Event()
 
     ctx = zmq.Context.instance()
 
@@ -688,7 +690,7 @@ def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger']):
     # make the xsub receive all messages
     xsub_socket.send_multipart([b'\x01'])
 
-    while True:            
+    while not stop_event.isSet():            
         try:
             # poll for events
             events = dict(poller.poll(1000))
@@ -869,7 +871,7 @@ class ZMQServiceBroker:
     Service Queue routes from clients to the appropriate
         worker and vice verse
     """
-    def __init__(self, addr:str, timeo:int = 1000):
+    def __init__(self, addr:str, timeo:int = 1000, stop_event:threading.Event = None):
         '''
         addr: address where to bind and receive comm from workers and clients
         timeo: timeout for the poller
@@ -884,6 +886,8 @@ class ZMQServiceBroker:
         self.socket.bind(addr)
         # poll timeo
         self.timeo = timeo        
+        # external stop signal
+        self.stop_event = stop_event if stop_event else threading.Event()
 
         self.services = {}
 
@@ -948,7 +952,7 @@ class ZMQServiceBroker:
 
     def serve(self):
         print(f'[{ts()}] Starting ZMQServiceBroker on {self.addr}')
-        while True:
+        while not self.stop_event.isSet():            
             try:
                 msg = self.recv()
                 if msg:  
@@ -1021,11 +1025,13 @@ class ZMQServiceBroker:
                 self.purge()
 
             except KeyboardInterrupt:
-                print(f'[{ts()}] ZMQServiceBroker KeyboardInterrupt. Exit.')
+                print(f'[{ts()}] ZMQServiceBroker KeyboardInterrupt. ')
                 break
             except Exception as e:
                 print(f'[{ts()}] ZMQServiceBroker error: ', e)
                 break # Interrupted
+        
+        print(f'[{ts()}] terminating ZMQServiceBroker...')
         # close socket
         self.socket.close()
         # destroy context

@@ -1,5 +1,5 @@
 from .defaults import REGISTRY_HOST, REGISTRY_PORT, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG, BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
-from .devices import proxy, broker
+from .devices import proxy, broker, devices
 from .registry import SRPCRegistry, Registry
 from .registry_client import RegistryClient
 from .server import SRPCServer
