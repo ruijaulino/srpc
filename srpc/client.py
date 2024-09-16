@@ -51,11 +51,14 @@ class SRPCClient:
 
     # must be subscribed before
     # waits for a topic (could just increase the timeout)
-    def wait(self):
-        while True:
+    def wait(self, timeo:int = 3000000): # the timeout is very large. in any practical setting this is not achieved
+        topic, msg = None, None
+        s = time.time()
+        while time.time() < s + timeo:
             topic, msg = self.listen()
             if topic is not None:
                 return topic, msg
+        return topic, msg
 
     def call(self, service, method, args = [], kwargs = {}, close:bool = False):
         req = {
