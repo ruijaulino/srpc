@@ -827,7 +827,6 @@ class ZMQServiceBrokerService:
     def next_request(self):
         return self.requests.pop(0).get('msg')
 
-    
     def purge_requests(self):
         new_requests = []
         for e in self.requests:
@@ -840,14 +839,14 @@ class ZMQServiceBrokerService:
     def purge_workers(self):
         """Look for & kill workers that are not sending heartbeats"""
         t = time.time()
-        expired_idx = []
+        expired_address = []
         for i, e in enumerate(self.workers_expiry):
             if t > e:  # Worker expired
-                expired_idx.append(i)
-        for i in expired_idx:
-            print(f"[{ts()}] Idle worker {self.workers_address[i]} for service {self.name} expired" )
-            _ = self._pop_worker(i)
-
+                expired_address.append(self.workers_address[i])
+        for address in expired_address:
+            print(f"[{ts()}] Idle worker {address} for service {self.name} expired" )
+            _ = self._pop_worker(self.workers_address.index(address))
+            
     def purge(self):
         self.purge_requests()
         self.purge_workers()
@@ -1041,7 +1040,7 @@ class ZMQServiceBroker:
 
 class ZMQServiceBrokerWorker(ZMQR):
     # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context, service:str):
+    def __init__(self, ctx:zmq.Context, service:str, worker_info: bool = False):
         '''
         '''
         ZMQR.__init__(
@@ -1049,10 +1048,11 @@ class ZMQServiceBrokerWorker(ZMQR):
                         ctx = ctx, 
                         zmq_type = zmq.DEALER, 
                         timeo = COMM_HEARTBEAT_INTERVAL/10, 
-                        identity = create_identity(), 
+                        identity = None, 
                         reconnect = False
                         )                
         self.service = service
+        self.worker_info = worker_info
         self.ping_t = None        
         self.pong_at = None
         self.queue_alive = False
@@ -1062,11 +1062,11 @@ class ZMQServiceBrokerWorker(ZMQR):
         connect the socket
         send message that is ready
         '''
-        # create new identity
+        # # create new identity
         self.set_identity(create_identity())
         # use the private method
         self._connect(addr)
-        print(f"[{ts()}] Service {self.service} worker {self.identity} ready")
+        if self.worker_info: print(f"[{ts()}] ZMQServiceBrokerWorker worker {self.identity} for service {self.service} ready")
         self.ping_t = time.time()
         self.pong_t = time.time()
         self.queue_alive = False

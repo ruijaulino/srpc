@@ -4,17 +4,18 @@ import time
 import threading
 import random
 import string
+import datetime as dt
 
 try:
     from .utils import SRPCTopic, clear_screen
     from .utils import build_server_response, OK_STATUS, ERROR_STATUS
     from .registry_client import RegistryClient
-    from .custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string
+    from .custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string, create_identity
 except ImportError:
     from utils import SRPCTopic, clear_screen, build_server_response
     from utils import build_server_response, OK_STATUS, ERROR_STATUS
     from registry_client import RegistryClient
-    from custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string
+    from custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string, create_identity
 
 try:
     from .defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
@@ -31,6 +32,7 @@ class SRPCServer:
                 n_workers:int = 1, 
                 thread_safe:bool = False, 
                 clear_screen:bool = True,
+                worker_info:bool = False
                 ):
         self._name = name        
         
@@ -57,6 +59,7 @@ class SRPCServer:
         self._n_workers = n_workers
 
         self._workers = []
+        self._worker_info = worker_info
         # self._reg_th = None
         # self._req_queue = None
         
@@ -140,10 +143,8 @@ class SRPCServer:
     def base_worker(self):
         # base worker should create its socket
 
-        wid = "worker_" + generate_random_string(5)
-        # print(f'Worker {wid} started')
-
-        worker_socket = ZMQServiceBrokerWorker(self.ctx, service = self._name)
+        # worker_identity = create_identity()
+        worker_socket = ZMQServiceBrokerWorker(self.ctx, service = self._name, worker_info = self._worker_info)
         worker_socket.connect(self._broker_addr)
         
         while not self.stop_event.isSet():            
@@ -153,6 +154,7 @@ class SRPCServer:
                     try:
                         # req to json
                         req = json.loads(req)                        
+                        if self._worker_info: print(f'[{dt.datetime.now()}]: Worker id={worker_socket.identity} for service {self._name} got request: {req}')
                         if self._thread_safe:
                             with self._thread_safe_lock:
                                 rep = self.handle_request(req)    
@@ -172,6 +174,8 @@ class SRPCServer:
                 break        
         # do not terminate the context as it is shared
         worker_socket.close()
+        if self._worker_info: print(f'[{dt.datetime.now()}]: Base worker thread  id={worker_socket.identity} for service {self._name} terminated')
+
         # print(f'Worker {wid} closed')
     
     def _serve(self):
@@ -266,6 +270,6 @@ def test_server():
 
 
 if __name__ == "__main__":
-
-    test_server()
+    print(create_identity())
+    # test_server()
 
