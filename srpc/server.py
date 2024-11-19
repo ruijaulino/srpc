@@ -270,6 +270,6 @@ def test_server():
 
 
 if __name__ == "__main__":
-    print(create_identity())
-    # test_server()
+    # print(create_identity())
+    test_server()
 

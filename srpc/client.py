@@ -1,7 +1,7 @@
 import zmq
 import json
 import time
-
+import datetime as dt
 try:
     from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQSub, ZMQServiceBrokerClient
     from .utils import build_server_response, OK_STATUS, ERROR_STATUS
@@ -13,8 +13,12 @@ except ImportError:
     from defaults import NO_REP_MSG, NO_REQ_MSG
     from defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 
+
+def ts():
+    return dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
 class SRPCClient:
-    def __init__(self, broker_addr:str = None, proxy_pub_addr:str = None, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None):
+    def __init__(self, broker_addr:str = None, proxy_pub_addr:str = None, timeo:int = 1, last_msg_only:bool = True, no_rep_msg:str = None, no_req_msg:str = None, info:bool = True):
         
         self._broker_addr = broker_addr if broker_addr else BROKER_ADDR
         self._proxy_pub_addr = proxy_pub_addr if proxy_pub_addr else PROXY_PUB_ADDR
@@ -23,6 +27,7 @@ class SRPCClient:
         self.no_rep_msg = no_rep_msg if no_rep_msg else NO_REP_MSG
         self.no_req_msg = no_req_msg if no_req_msg else NO_REQ_MSG
         
+        self.info = info
         # it is better that the clients create their own, non shared context, in order to be able to use
         # clients inside other SRPCServer's
         self.ctx = zmq.Context()
@@ -96,7 +101,12 @@ class SRPCClient:
             return rep.get('error_msg')
 
     def invoque(self, service, method, args = [], kwargs = {}, close = False):
-        return self.parse(self.call(service, method, args, kwargs, close))
+        s = time.time()
+        out = self.parse(self.call(service, method, args, kwargs, close))
+        if self.info:
+            print(f'[{ts()}] Time to invoque method {method} on service {service}: {time.time()-s} [secs]')
+        return out
+
 
 def test_client():
     client = SRPCClient()
