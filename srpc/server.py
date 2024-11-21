@@ -60,6 +60,9 @@ class SRPCServer:
 
         self._workers = []
         self._worker_info = worker_info
+
+        self._thread_names = {} # to print the workers info
+
         # self._reg_th = None
         # self._req_queue = None
         
@@ -140,6 +143,10 @@ class SRPCServer:
         return rep
 
 
+    def worker_print(self, msg: str):
+        worker_identity = self._thread_names.get(threading.get_ident(), 'UNKNOWN WORKER IDENTITY. THIS SHOULD NOT HAPPEN')
+        if self._worker_info: print(f'[{dt.datetime.now()}] Worker id={worker_identity} for service {self._name}: {msg}')
+
     def base_worker(self):
         # base worker should create its socket
 
@@ -147,6 +154,10 @@ class SRPCServer:
         worker_socket = ZMQServiceBrokerWorker(self.ctx, service = self._name, worker_info = self._worker_info)
         worker_socket.connect(self._broker_addr)
         
+        # add a thread name
+        thread_id = threading.get_ident()
+        self._thread_names[thread_id] = worker_socket.identity
+
         while not self.stop_event.isSet():            
             try:
                 clientid, req = worker_socket.recv_work()
@@ -154,7 +165,7 @@ class SRPCServer:
                     try:
                         # req to json
                         req = json.loads(req)                        
-                        if self._worker_info: print(f'[{dt.datetime.now()}]: Worker id={worker_socket.identity} for service {self._name} got request: {req}')
+                        self.worker_print(msg = f'Request: {req}')
                         if self._thread_safe:
                             with self._thread_safe_lock:
                                 rep = self.handle_request(req)    
@@ -174,9 +185,7 @@ class SRPCServer:
                 break        
         # do not terminate the context as it is shared
         worker_socket.close()
-        if self._worker_info: print(f'[{dt.datetime.now()}]: Base worker thread  id={worker_socket.identity} for service {self._name} terminated')
-
-        # print(f'Worker {wid} closed')
+        self.worker_print(msg = f'Worker terminated.')
     
     def _serve(self):
         if self._clear_screen: 
@@ -260,7 +269,7 @@ def test_server():
                 return "Cannot divide by zero"
             return a / b
 
-    server = SRPCServer(name = 'test_server')
+    server = SRPCServer(name = 'test_server', worker_info = True, n_workers = 3)
     server.register_function(add)
     server.register_function(subtract)
     server.register_class(ExampleClass)  
