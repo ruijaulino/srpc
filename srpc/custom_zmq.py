@@ -785,9 +785,13 @@ class ZMQSub:
         self.socket.subscribe(topic.encode())
     
     def recv(self):
-        if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            topic, msg = self.socket.recv_multipart()
-            return topic.decode(), msg.decode()
+        # if we get a KeyboardInterrupt (or other error...) while listening we return a topic = -1
+        try:
+            if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
+                topic, msg = self.socket.recv_multipart()
+                return topic.decode(), msg.decode()
+        except:
+            return -1, None
         return None, None
     
     def close(self):
@@ -802,6 +806,7 @@ class ZMQServiceBrokerService:
         self.requests = [] # requests to the service
         self.workers_address = [] # OrderedDict() # workers queue
         self.workers_expiry = []    
+        self.workers_address_aux = set()
 
     def _pop_worker(self, idx:int):
         self.workers_expiry.pop(idx)        
@@ -813,6 +818,11 @@ class ZMQServiceBrokerService:
 
     def add_worker(self, address):
         # remove if exists
+        
+        if address not in self.workers_address_aux:
+            print(f"[{ts()}] New worker {address} for service {self.name}" )
+        self.workers_address_aux.add(address)
+
         if address in self.workers_address:
             _ = self._pop_worker(self.workers_address.index(address))        
         self.workers_address.append(address)
@@ -844,7 +854,7 @@ class ZMQServiceBrokerService:
             if t > e:  # Worker expired
                 expired_address.append(self.workers_address[i])
         for address in expired_address:
-            print(f"[{ts()}] Idle worker {address} for service {self.name} expired" )
+            print(f"[{ts()}] Worker {address} for service {self.name} expired" )
             _ = self._pop_worker(self.workers_address.index(address))
             
     def purge(self):
@@ -919,7 +929,7 @@ class ZMQServiceBroker:
 
     def require_service(self, service:str):
         if not self.has_service(service):        
-            print(f"[{ts()}] Registering service {service}")    
+            # print(f"[{ts()}] Registering service {service}")    
             self.services[service] = ZMQServiceBrokerService(service)
         return self.services[service]
 
@@ -1122,7 +1132,7 @@ class ZMQServiceBrokerWorker(ZMQR):
 
 class ZMQServiceBrokerClient(ZMQR):
     # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context):
+    def __init__(self, ctx:zmq.Context, info:bool = True):
         '''
         '''
         ZMQR.__init__(
@@ -1133,6 +1143,7 @@ class ZMQServiceBrokerClient(ZMQR):
                         identity = create_identity(), 
                         reconnect = True
                         )                
+        self.info = info
 
     def connect(self, addr:str = None):
         '''
@@ -1142,8 +1153,8 @@ class ZMQServiceBrokerClient(ZMQR):
         # create new identity
         self.set_identity(create_identity())
         # use the private method
-        self._connect(addr)
-        print(f"[{ts()}] Client to service queue {self.identity} ready")
+        self._connect(addr)        
+        if self.info: print(f"[{ts()}] Client to service queue {self.identity} ready")
         
     def req(self, service:str, msg:str, timeo:int = None):
         return self.send_multipart([COMM_HEADER_CLIENT, service, msg], timeo = timeo)

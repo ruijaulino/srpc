@@ -26,7 +26,7 @@ def broker(addr:str = None, stop_event:threading.Event = None):
 
 def devices(broker_addr:str = None, pub_addr:str = None, sub_addr:str = None, topics_no_cache = ['trigger']):
     stop_event = threading.Event()
-    th_proxy = threading.Thread(target = proxy, kwargs = {'pub_addr':pub_addr, 'sub_addr':sub_addr, 'stop_event':stop_event})
+    th_proxy = threading.Thread(target = proxy, kwargs = {'pub_addr':pub_addr, 'sub_addr':sub_addr, 'topics_no_cache':topics_no_cache, 'stop_event':stop_event})
     th_proxy.start()
     th_sb = threading.Thread(target = broker, kwargs = {'addr':broker_addr, 'stop_event':stop_event})
     th_sb.start()

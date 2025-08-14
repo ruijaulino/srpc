@@ -32,7 +32,7 @@ class SRPCClient:
         # clients inside other SRPCServer's
         self.ctx = zmq.Context()
         
-        self._broker_client = ZMQServiceBrokerClient(self.ctx)
+        self._broker_client = ZMQServiceBrokerClient(self.ctx, info = info)
         self._broker_client.connect(self._broker_addr)
         
         self._proxy_sub = ZMQSub(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
@@ -51,18 +51,25 @@ class SRPCClient:
         self._proxy_sub.subscribe(topic)
 
     def listen(self):
-        topic, msg = self._proxy_sub.recv()
+        try:
+            topic, msg = self._proxy_sub.recv()        
+        except:
+            topic, msg = -1, None
         return topic, msg
 
     # must be subscribed before
     # waits for a topic (could just increase the timeout)
     def wait(self, timeo:int = 3000000): # the timeout is very large. in any practical setting this is not achieved
-        topic, msg = None, None
-        s = time.time()
-        while time.time() < s + timeo:
-            topic, msg = self.listen()
-            if topic is not None:
-                return topic, msg
+        # if there is a KeyboardInterrupt (or other error) we return a topic = -1
+        try:
+            topic, msg = None, None
+            s = time.time()
+            while time.time() < s + timeo:
+                topic, msg = self.listen()            
+                if topic is not None:
+                    return topic, msg
+        except:
+            topic, msg = -1, None
         return topic, msg
 
     def call(self, service, method, args = [], kwargs = {}, close:bool = False):
