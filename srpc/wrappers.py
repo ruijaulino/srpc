@@ -24,13 +24,6 @@ class QueueWrapper(object):
         self.active = threading.Event()
         self.active.set()
 
-
-    def close(self):
-        pass
-        # self.active.clear()
-        # self.q.close() 
-        # self.q.join_thread()
-
     def get(self, timeout=0):
         out = None
         # if self.active.isSet():

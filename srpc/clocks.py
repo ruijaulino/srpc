@@ -25,12 +25,14 @@ except ImportError:
     from defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 
 
-
 def today_business_day():
     # Get today's date
     today = pd.Timestamp.today()
     # Check if today is a business day
     return pd.bdate_range(start=today, end=today).size == 1
+
+
+
 
 
 def clocks(proxy_sub_addr:str = None, minute_clocks_tz:list = ['Europe/Lisbon', 'US/Eastern','Asia/Tokyo'], offsets:list = [5,10,15,20,25,30,35,40,45,50,55]):
@@ -96,7 +98,16 @@ def listen_clocks():
         topic, msg = client.wait()
         print(dt.datetime.now(), topic, msg)
     client.close()
-   
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
 
 
