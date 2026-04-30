@@ -38,6 +38,10 @@ class SRPCClient:
         self._proxy_sub = ZMQSub(ctx = self.ctx, last_msg_only = self._last_msg_only, timeo = self._timeo)
         self._proxy_sub.connect(self._proxy_pub_addr)
 
+
+    def set_timeo(self, timeo:int):
+        self._timeo = timeo
+
     def close(self):
         # if the client (or some class that inherits from SRPCClient) 
         # is being used where another shared context exits, then we must take
