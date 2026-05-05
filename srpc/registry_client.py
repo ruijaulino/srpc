@@ -7,11 +7,11 @@ import os
 try:
     from .utils import clear_screen
     from .client import SRPCClient
-    from .custom_zmq import ZMQR, ZMQP
+    from .custom_zmq import ZMQR
 except ImportError:
     from utils import clear_screen
     from client import SRPCClient  
-    from custom_zmq import ZMQR, ZMQP
+    from custom_zmq import ZMQR
 try:
     from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT
 except ImportError:

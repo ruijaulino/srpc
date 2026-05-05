@@ -1,633 +1,111 @@
-import zmq
-import threading
-from random import randint
-import time
-import random
-import string
 import datetime as dt
-from collections import OrderedDict
+import logging
+import threading
+import time
+import uuid
+from collections import deque
+from dataclasses import dataclass
+from typing import Deque, Dict, List, Optional, Tuple, Union
 
-# default message to use in Queue to signal the worker is ready
-COMM_ALIVE = "\x01"
+import zmq
+
+
+# -----------------------------------------------------------------------------
+# Protocol constants
+# -----------------------------------------------------------------------------
+
+ENCODING = "utf-8"
+
 COMM_HEARTBEAT_INTERVAL = 5
-ENCODING = 'utf-8' #'Windows-1252'
+COMM_WORKER_EXPIRY_FACTOR = 2.5
 
-# for service queue
 COMM_HEADER_WORKER = "W"
 COMM_HEADER_CLIENT = "C"
+
 COMM_TYPE_HEARTBEAT = "H"
 COMM_TYPE_REP = "REP"
 COMM_TYPE_REQ = "REQ"
+COMM_TYPE_ERROR = "ERR"
+
 COMM_MSG_HEARTBEAT = ""
 
-def generate_random_string(n):
-    # Define the character set: lowercase, uppercase letters, digits
-    characters = string.ascii_letters + string.digits
-    # Generate a random string
-    random_string = ''.join(random.choice(characters) for _ in range(n))
-    return random_string
-
-def create_identity():
-    return "%04X-%04X" % (randint(0, 0x10000), randint(0, 0x10000))  
+DEFAULT_SOCKET_TIMEOUT = 1.0
+DEFAULT_REQUEST_TTL = 60.0
+DEFAULT_MAX_PENDING_REQUESTS = 10_000
 
 
-def ts():
-    return dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+ 
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+
+def create_identity(prefix: str = "") -> str:
+    suffix = uuid.uuid4().hex[:12].upper()
+    return f"{prefix}{suffix}" if prefix else suffix
 
 
-# Generic, asynch and stoppable ZMQ REQ/REP socket in a wrapper
-class ZMQR:
-    def __init__(self, ctx:zmq.Context, zmq_type:int, timeo:int = 1, identity:str = None, reconnect:bool = True):
-        self.timeo = 1000*timeo
+def ts() -> str:
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def setup_basic_logging(level: int = logging.INFO) -> None:
+    logging.basicConfig(
+        level=level,
+        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+def encode_frame(value: Union[str, bytes]) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    return str(value).encode(ENCODING)
+
+
+def decode_frame(value: bytes) -> str:
+    return value.decode(ENCODING, errors="replace")
+
+
+def encode_msg(msg: Union[str, bytes, List[Union[str, bytes]]]) -> Union[bytes, List[bytes]]:
+    if isinstance(msg, list):
+        return [encode_frame(e) for e in msg]
+    return encode_frame(msg)
+
+
+def decode_msg(msg: Union[bytes, List[bytes]]) -> Union[str, List[str]]:
+    if isinstance(msg, list):
+        return [decode_frame(e) if isinstance(e, bytes) else str(e) for e in msg]
+    return decode_frame(msg) if isinstance(msg, bytes) else str(msg)
+
+
+# -----------------------------------------------------------------------------
+# Generic ZMQ wrapper
+# -----------------------------------------------------------------------------
+
+class ZMQPub:
+    def __init__(self, ctx:zmq.Context = None, timeo:int = 1):
         self.ctx = ctx
-        self.socket = None
-        self.identity = identity if identity else create_identity()
-        self.zmq_type = zmq_type
-        assert self.zmq_type in [zmq.REQ, zmq.REP, zmq.DEALER], "ZMQR must use a REP or REQ socket"
-        self.addr = [] # list of addr
-        self.bind_addr = ''
-        self.binded = False
-        self.reconnect = reconnect
-
-    def set_identity(self, identity:str = None):
-        self.identity = identity
-        if self.socket and self.identity: self.socket.setsockopt_string(zmq.IDENTITY, self.identity)
-
-    def _build_socket(self):
-        if self.socket: self.close()
-        self.socket = self.ctx.socket(self.zmq_type)
-        if self.identity: self.socket.setsockopt_string(zmq.IDENTITY, self.identity)
-        self.socket.setsockopt(zmq.LINGER, 0)
-        
-    def bind(self, addr:str = None):
-        self.bind_addr = addr if addr else self.bind_addr
-        self.binded = True
-        self._build_socket()
-        self.socket.bind(self.bind_addr)
-
-    def _connect(self, addr:str = None):
-        assert not self.binded, "trying to connect a socket that was binded"
-        if addr not in self.addr and addr: self.addr.append(addr)
-        self._build_socket()
-        for addr in self.addr:
-            self.socket.connect(addr)
-
-    # override if necessary
-    def connect(self, addr:str = None):
-        self._connect(addr)
-
-    def _encode_msg(self, msg):
-        '''
-        msg: str or list of strings
-        '''
-
-        enc_msg = "\x01".encode()
-        if isinstance(msg, str):
-            enc_msg = msg.encode()
-        elif isinstance(msg, list):
-            enc_msg = []
-            for e in msg: 
-                if isinstance(e, str):
-                    e = e.encode()
-                enc_msg.append(e)
-        else:
-            enc_msg = msg
-        return enc_msg   
-
-    def _decode_msg(self, msg):
-        '''
-        msg: str or list of strings
-        Note: when we are controling the envelope, zmq can attribute
-        identities to sockets that are not decodable, that is the main reason
-        we do the try/except here. other solution to avoid this would be to force
-        all clients to have an identity (random one)
-        '''
-        dec_msg = ""
-        if isinstance(msg, bytes):
-            dec_msg = msg.decode()
-        elif isinstance(msg, list):
-            dec_msg = []
-            for e in msg: 
-                if isinstance(e, bytes):
-                    e = e.decode()
-                dec_msg.append(e)
-        else:
-            dec_msg = msg
-        return dec_msg   
-
-    def _reconnect(self):
-        if self.binded:
-            self.bind()
-        else:
-            self.connect()
-
-    def close(self):        
-        self.socket.close()
-
-    def send(self, msg:str, timeo:int = None):
-        timeo = int(1000*timeo) if timeo else self.timeo
-        # check if we can send - make poll with a timeout for the operation to write
-        if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
-            self.socket.send(self._encode_msg(msg))
-            return 1
-        # reset the state to be able to send again if zmq.REQ
-        if self.zmq_type == zmq.REP:
-            if self.reconnect: self._reconnect()
-        return 0
-
-    def send_multipart(self, msg, timeo:int = None):
-        '''
-        msg: list of strings
-        '''
-        timeo = int(1000*timeo) if timeo else self.timeo
-        # check if we can send - make poll with a timeout for the operation to write
-        if (self.socket.poll(timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
-            self.socket.send_multipart(self._encode_msg(msg))
-            return 1
-        # reset the state to be able to send again if zmq.REQ
-        if self.zmq_type == zmq.REP:
-            if self.reconnect: self._reconnect()
-        return 0        
-
-    def recv(self, timeo:int = None):
-        timeo = int(1000*timeo) if timeo else self.timeo
-        if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv()
-            msg = self._decode_msg(msg)
-            return msg
-        # reset the state to be able to send again if zmq.REQ
-        if self.zmq_type in [zmq.REQ, zmq.DEALER]:
-            if self.reconnect: self._reconnect()
-        return None
-
-    def recv_multipart(self, timeo:int = None):
-        timeo = int(1000*timeo) if timeo else self.timeo
-        if (self.socket.poll(timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_multipart()
-            msg = self._decode_msg(msg)
-            return msg
-        # reset the state to be able to send again if zmq.REQ
-        if self.zmq_type in [zmq.REQ, zmq.DEALER]:
-            if self.reconnect: self._reconnect()
-        return None
-
-# --------------------------------------------------
-# implements a queue for the simple pirate pattern
-# - ROUTER to ROUTER
-# - when worker connect they send a predefined message stating that they are ready to perform tasks
-# - assumes that the workers dont die
-class ZMQSimpleQueue:
-    def __init__(self, ctx:zmq.Context, client_addr:str, worker_addr:str, poll_timeo:int = 1, standalone:bool = False):
-        '''
-        ctx: zmq.Context 
-            context
-
-        standalone: bool 
-            means that the Queue is supposed to be used in a single program
-            of it own like
-                q = ZMQQueue(ctx, "tcp://127.0.0.1:5555", "tcp://127.0.0.1:5556")
-                q.start()
-                exit(0)
-        '''
-        self.ctx = ctx
-        self.client_addr = client_addr
-        self.worker_addr = worker_addr
-        self.poll_timeo = 1000*poll_timeo
-        self.standalone = standalone
-        self._stopevent = threading.Event()
-        self.th = None
-
-    def _condition(self):
-        if self.standalone:
-            return True
-        else:
-            return not self._stopevent.isSet()
-
-    def queue(self):
-
-        frontend = self.ctx.socket(zmq.ROUTER) # ROUTER
-        backend = self.ctx.socket(zmq.ROUTER) # ROUTER
-        
-        frontend.bind(self.client_addr) # For clients
-        backend.bind(self.worker_addr)  # For workers
-
-        poll_workers = zmq.Poller()
-        poll_workers.register(backend, zmq.POLLIN)
-
-        poll_both = zmq.Poller()
-        poll_both.register(frontend, zmq.POLLIN)
-        poll_both.register(backend, zmq.POLLIN)
-
-        workers = []
-
-        while self._condition():
-            try:
-                if workers:
-                    socks = dict(poll_both.poll(self.poll_timeo))
-                else:
-                    socks = dict(poll_workers.poll(self.poll_timeo))
-                # Handle worker activity on backend
-                if socks.get(backend) == zmq.POLLIN:
-                    # Use worker address for routing
-                    msg = backend.recv_multipart()
-                    address = msg[0]
-                    workers.append(address)
-                    # Everything after the second (delimiter) frame is reply
-                    reply = msg[2:]
-                    # Forward message to client if it's not a READY message
-                    if reply[0] != COMM_ALIVE.encode(ENCODING):
-                        frontend.send_multipart(reply)
-                    else:
-                        print(f'Worker {address.decode()} is ready')
-                if socks.get(frontend) == zmq.POLLIN:
-                    #  Get client request, route to first available worker
-                    msg = frontend.recv_multipart()
-                    request = [workers.pop(0), ''.encode(ENCODING)] + msg
-                    backend.send_multipart(request)
-
-            except Exception as e:
-                print('ZMQQueue thread error : ', e)
-                if self.standalone: 
-                    break
-
-        frontend.close()
-        backend.close()
-
-    def stop(self):
-        '''
-        stops the queue
-        '''
-        # closing the sockets will trigger an error inside the thread
-        # stopping the proxy        
-        self._stopevent.set()
-        if self.th: self.th.join()
-        
-    def start(self):
-        '''
-        starts the queue
-        '''
-        if self.standalone:
-            self.queue()
-        else:
-            # Start the proxy in a separate thread
-            self.th = threading.Thread(target=self.queue)
-            self.th.start()              
-
-
-# implement a worker for the simple pirate pattern
-# when connects, send a message informing that it is ready to perform tasks
-# should be used with recv_multipart and send_multipart to handle the envelope
-# for example
-#   when receiving a 
-class ZMQSimpleQueueWorker(ZMQR):
-    # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context, timeo:int = 1, identity:str = None):
-        # this socket should not reconnect
-        ZMQR.__init__(self, ctx = ctx, zmq_type = zmq.REQ, timeo = timeo, identity = identity, reconnect = False)
-
-    def connect(self, addr):
-        '''
-        connect the socket
-        send message that is ready
-        '''
-        # use the private method
-        self._connect(addr)
-        print("%s worker ready" % self.identity)
-        self.send(COMM_ALIVE)
-
-    def recv_work(self):
-        '''
-        receive work
-        should receive a multipart message
-        like ['client addr/identity','','request']
-        '''
-        msg = self.recv_multipart()
-        clientid = None
-        if msg:
-            if len(msg) == 3:
-                clientid, msg = msg[0], msg[2]
-            else:
-                msg = None
-                print('recv invalid message format')
-        return clientid, msg
-
-    def send_work(self, clientid:str, msg:str):
-        self.send_multipart([clientid,'',msg])
-
-
-
-# --------------------------------------------------
-# implements a queue for the paranoid pirate pattern
-# - ROUTER to ROUTER
-# - exchange heartbeats
-
-class ReliableWorker(object):
-    def __init__(self, address):
-        self.address = address
-        self.expiry = time.time() + COMM_HEARTBEAT_INTERVAL*2
-
-class ReliableWorkerQueue(object):
-    def __init__(self):
-        self.queue = OrderedDict()
-
-    def ready(self, worker):
-        self.queue.pop(worker.address, None)
-        self.queue[worker.address] = worker
-
-    def purge(self):
-        """Look for & kill workers that are not sending heartbeats"""
-        t = time.time()
-        expired = []
-        for address, worker in self.queue.items():
-            if t > worker.expiry:  # Worker expired
-                expired.append(address)
-        for address in expired:
-            print("Idle worker expired: %s" % address)
-            self.queue.pop(address, None)
-
-    def next(self):
-        address, worker = self.queue.popitem(False)
-        return address
-
-    def __len__(self):
-        return len(self.queue)
-
-class ZMQReliableQueue:
-    def __init__(self, ctx:zmq.Context, client_addr:str, worker_addr:str, poll_timeo:int = 1, standalone:bool = False):
-        '''
-        ctx: zmq.Context 
-            context
-
-        standalone: bool 
-            means that the Queue is supposed to be used in a single program
-            of it own like
-                q = ZMQQueue(ctx, "tcp://127.0.0.1:5555", "tcp://127.0.0.1:5556")
-                q.start()
-                exit(0)
-        '''
-        self.ctx = ctx
-        self.client_addr = client_addr
-        self.worker_addr = worker_addr
-        self.poll_timeo = 1000*poll_timeo
-        self.standalone = standalone
-        self._stopevent = threading.Event()
-        self.th = None
-        
-    def _condition(self):
-        if self.standalone:
-            return True
-        else:
-            return not self._stopevent.isSet()
-
-    def queue(self):
-
-        frontend = self.ctx.socket(zmq.ROUTER) # ROUTER
-        backend = self.ctx.socket(zmq.ROUTER) # ROUTER
-        frontend.bind(self.client_addr) # For clients
-        backend.bind(self.worker_addr)  # For workers
-        poll_workers = zmq.Poller()
-        poll_workers.register(backend, zmq.POLLIN)
-
-        poll_both = zmq.Poller()
-        poll_both.register(frontend, zmq.POLLIN)
-        poll_both.register(backend, zmq.POLLIN)
-
-        workers = ReliableWorkerQueue()
-
-        heartbeat_at = time.time() + COMM_HEARTBEAT_INTERVAL
-
-        while self._condition():
-            try:
-                if len(workers) > 0:
-                    poller = poll_both
-                else:
-                    poller = poll_workers
-                socks = dict(poller.poll(COMM_HEARTBEAT_INTERVAL * 1000))
-                # Handle worker activity on backend                
-                if socks.get(backend) == zmq.POLLIN:
-                    # Use worker address for LRU routing
-                    frames = backend.recv_multipart()
-                    address = frames[0]
-                    workers.ready(ReliableWorker(address))
-                    # Validate control message, or return reply to client
-                    msg = frames[1:]
-                    if len(msg) == 1:
-                        if msg[0] == COMM_ALIVE.encode():                            
-                            # reply imediately to the heartbeat
-                            msg = [address, COMM_ALIVE.encode()]
-                            backend.send_multipart(msg)
-                        else:
-                            print(f'Worker {address} sent msg with unknown format')
-                    else:
-                        # send worker reply to the client via frontend
-                        frontend.send_multipart(msg)
-                # Handle clients requests in the frontend
-                if socks.get(frontend) == zmq.POLLIN:
-                    frames = frontend.recv_multipart()
-                    frames.insert(0, workers.next())
-                    backend.send_multipart(frames)
-                workers.purge()
-            except Exception as e:
-                print('ZMQQueue thread error : ', e)
-                if self.standalone: 
-                    break      
-        frontend.close()
-        backend.close()
-
-    def stop(self):
-        '''
-        stops the queue
-        '''
-        # closing the sockets will trigger an error inside the thread
-        # stopping the proxy        
-        self._stopevent.set()
-        if self.th: self.th.join()
-        
-    def start(self):
-        '''
-        starts the queue
-        '''
-        if self.standalone:
-            self.queue()
-        else:
-            # Start the proxy in a separate thread
-            self.th = threading.Thread(target=self.queue)
-            self.th.start()              
-
-# implement a worker for the paranoid pirate pattern
-# uses ping-pong between worker and queue
-# the workers pings the queue and it should answer
-# if it does not answer within the heartbeat time, then the worker assumes the queue is dead
-# and starts a new connection
-# when the queue get a message from the worker puts that worker to be used
-class ZMQReliableQueueWorker(ZMQR):
-    # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context):
-        '''
-        '''
-        ZMQR.__init__(
-                        self, 
-                        ctx = ctx, 
-                        zmq_type = zmq.DEALER, 
-                        timeo = COMM_HEARTBEAT_INTERVAL/10, 
-                        identity = create_identity(), 
-                        reconnect = False
-                        )                
-        self.ping_t = None        
-        self.pong_at = None
-        self.queue_alive = False
-    
-    def connect(self, addr:str = None):
-        '''
-        connect the socket
-        send message that is ready
-        '''
-        # create new identity
-        self.set_identity(create_identity())
-        # use the private method
-        self._connect(addr)
-        print("%s worker ready" % self.identity)
-        self.ping_t = time.time()#  + COMM_HEARTBEAT_INTERVAL
-        self.pong_t = time.time()
-        self.queue_alive = False
-        self.send(COMM_ALIVE)
-
-    def recv_work(self):
-        '''
-        receive work and handle heartbeats
-        should receive a multipart message
-        like ['client addr/identity','','request']
-        '''
-        # is a message is not received in this time it means that the queue is dead
-        # keeps reconnecting
-        msg = self.recv_multipart()
-        clientid = None
-        if msg:    
-            # if we get something means that the queue is up
-            self.queue_alive = True
-            self.pong_t = time.time()
-            # received a message with work
-            if len(msg) == 3:
-                clientid, msg = msg[0], msg[2]
-            elif len(msg) == 1 and msg[0] == COMM_ALIVE:                
-                msg, clientid = None, None
-            else:
-                # received a pong/other message with a unknown format
-                print(f"Unknown message format from queue")
-                msg, clientid = None, None
-        # queue is not responding condition
-        if not self.queue_alive and (time.time() - self.pong_t > COMM_HEARTBEAT_INTERVAL):
-            print(f"Queue not responding to worker {self.identity}")
-            self.connect()
-        else: 
-            # signal to the queue that worker is alive by pinging it
-            if time.time() > self.ping_t + COMM_HEARTBEAT_INTERVAL:
-                self.ping_t = time.time()
-                self.queue_alive = False
-                self.send(COMM_ALIVE)
-        return clientid, msg
-
-    def send_work(self, clientid:str, msg:str):
-        return self.send_multipart([clientid,'',msg])
-
-# --------------------------------------------
-# pub socket with last value caching
-# if we are doing LVC, we create an internal socket to pub inside the thread
-# otherwise we bind directly this pub socket to the exterior
-# maybe could have just used a queue but in that case we would 
-class ZMQP:
-    def __init__(self, ctx:zmq.Context = None, lvc:bool = True, timeo:int = 1):
-        self.ctx = ctx
-        self.lvc = lvc        
+        self.timeo = 1000*timeo if timeo else 1000        
         self.addr = None
-        self.th = None
-        self._stopevent = threading.Event()
-        self._lock = threading.Lock()
-        self.timeo = 1000*timeo if timeo else 1000
         self.socket = None
-        self._inproc_addr = "inproc://"+generate_random_string(8)
 
-    def _lvc(self):
-        # detect new subscribers
-        # sub to the internal socket
-        # xpub to outside
-
-        # cache
-        cache = {}
-
-        # sub to internal socket
-        sub_socket = self.ctx.socket(zmq.SUB)
-        sub_socket.connect(self._inproc_addr)
-        sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        sub_socket.setsockopt(zmq.LINGER, 0)
-
-        # comm with exterior is made with a xpub
-        xpub_socket = self.ctx.socket(zmq.XPUB) 
-        xpub_socket.bind(self.addr)        
-        xpub_socket.setsockopt(zmq.LINGER, 0)
-        # this flag is needed otherwise the xpub will not receive repeated topics sub request
-        # and we cannot reroute the last message
-        xpub_socket.setsockopt(zmq.XPUB_VERBOSE, True) 
-
-        # poller for sockets
-        poller = zmq.Poller()
-        poller.register(sub_socket, zmq.POLLIN)
-        poller.register(xpub_socket, zmq.POLLIN)        
-
-        print('ZMQP lvc thread start')
-        while not self._stopevent.isSet():            
-            
-            events = dict(poller.poll(1000))
-            # for any new topic data, cache it and then forward
-            if sub_socket in events:
-                tmp = sub_socket.recv_multipart()
-                topic, msg = tmp                
-                cache[topic.decode()] = msg.decode()
-                xpub_socket.send_multipart(tmp)
-
-            # handle subscriptions
-            # When we get a new subscription we pull data from the cache:
-            if xpub_socket in events:
-                msg = xpub_socket.recv()
-                # Event is one byte 0=unsub or 1=sub, followed by topic
-                
-                if msg[0] == 1:
-                    st = msg[1:].decode()
-                    # need to run all that startswith
-                    for k,v in cache.items():
-                        if k.startswith(st):
-                            xpub_socket.send_multipart([k.encode(), v.encode()])
-        
-        print('ZMQP lvc thread closed')
-        sub_socket.close()
-
-
-    def bind(self, addr:str = None):
+    def connect(self, addr:str = None):
         self.addr = addr
         self.socket = self.ctx.socket(zmq.PUB)
         self.socket.setsockopt(zmq.LINGER, 0)
-        if self.lvc:
-            # sockets binds to a random address inproc
-            self.socket.bind(self._inproc_addr)
-            self.th = threading.Thread(target = self._lvc)
-            self.th.start()
-        else:
-            # comm with exterior is made with a pub
-            self.socket.bind(self.addr)
-
+        self.socket.connect(self.addr)
+        # time.sleep(1) # make sure all connections have time to be established
+    
     def publish(self, topic:str, msg:str):        
         if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
             self.socket.send_multipart([topic.encode(), msg.encode()])
-                
+            
     def close(self):
-        if self.lvc:
-            self._stopevent.set()
-            self.th.join()
         self.socket.close()
 
-# ---------------------------------
-# SUB socket
-class ZMQS:
+
+class ZMQSub:
     def __init__(self, ctx:zmq.Context = None, last_msg_only:bool = False, timeo:int = 1):
         self.ctx = ctx
         self.conflate = 1 if last_msg_only else 0
@@ -641,6 +119,7 @@ class ZMQS:
         self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
+        # time.sleep(1) # make sure all connections have time to be established
 
     def unsubscribe(self, topic:str):
         self.socket.unsubscribe(topic.encode())
@@ -649,13 +128,18 @@ class ZMQS:
         self.socket.subscribe(topic.encode())
     
     def recv(self):
-        if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            topic, msg = self.socket.recv_multipart()
-            return topic.decode(), msg.decode()
+        # if we get a KeyboardInterrupt (or other error...) while listening we return a topic = -1
+        try:
+            if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
+                topic, msg = self.socket.recv_multipart()
+                return topic.decode(), msg.decode()
+        except:
+            return -1, None
         return None, None
     
     def close(self):
         self.socket.close()
+
 
 
 
@@ -739,458 +223,592 @@ def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger'], stop_eve
     ctx.destroy()
 
 
-# SOCKETS FOR PROXY
 
-class ZMQPub:
-    def __init__(self, ctx:zmq.Context = None, timeo:int = 1):
-        self.ctx = ctx
-        self.timeo = 1000*timeo if timeo else 1000        
-        self.addr = None
-        self.socket = None
 
-    def connect(self, addr:str = None):
-        self.addr = addr
-        self.socket = self.ctx.socket(zmq.PUB)
-        self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.connect(self.addr)
-        # time.sleep(1) # make sure all connections have time to be established
-    
-    def publish(self, topic:str, msg:str):        
-        if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:            
-            self.socket.send_multipart([topic.encode(), msg.encode()])
-            
-    def close(self):
-        self.socket.close()
+class ZMQR:
+    """Small ZMQ socket wrapper with timeouts and explicit reconnect.
 
-class ZMQSub:
-    def __init__(self, ctx:zmq.Context = None, last_msg_only:bool = False, timeo:int = 1):
-        self.ctx = ctx
-        self.conflate = 1 if last_msg_only else 0
-        self.timeo = 1000*timeo if timeo else 1000        
-        self.addr = None
-        self.socket = None
-
-    def connect(self, addr:str = None):
-        self.addr = addr
-        self.socket = self.ctx.socket(zmq.SUB)
-        self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
-        self.socket.connect(self.addr)
-        # time.sleep(1) # make sure all connections have time to be established
-
-    def unsubscribe(self, topic:str):
-        self.socket.unsubscribe(topic.encode())
-
-    def subscribe(self, topic:str = ''):
-        self.socket.subscribe(topic.encode())
-    
-    def recv(self):
-        # if we get a KeyboardInterrupt (or other error...) while listening we return a topic = -1
-        try:
-            if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-                topic, msg = self.socket.recv_multipart()
-                return topic.decode(), msg.decode()
-        except:
-            return -1, None
-        return None, None
-    
-    def close(self):
-        self.socket.close()
-
-# SERVICES BROKER
-class ZMQServiceBrokerService:
-    """a single Service"""
-    def __init__(self, name:str, msg_timeo:int = 20):
-        self.name = name
-        self.msg_timeo = msg_timeo
-        self.requests = [] # requests to the service
-        self.workers_address = [] # OrderedDict() # workers queue
-        self.workers_expiry = []    
-        self.workers_address_aux = set()
-
-    def _pop_worker(self, idx:int):
-        self.workers_expiry.pop(idx)        
-        tmp = self.workers_address.pop(idx)
-        return tmp
-
-    def add_request(self, msg):
-        self.requests.append({'msg':msg, 'expiry':time.time()+self.msg_timeo})
-
-    def add_worker(self, address):
-        # remove if exists
-        
-        if address not in self.workers_address_aux:
-            print(f"[{ts()}] New worker {address} for service {self.name}" )
-        self.workers_address_aux.add(address)
-
-        if address in self.workers_address:
-            _ = self._pop_worker(self.workers_address.index(address))        
-        self.workers_address.append(address)
-        self.workers_expiry.append(time.time() + COMM_HEARTBEAT_INTERVAL*2)
-        
-    def next_worker(self):
-        '''
-        returns the next worker address
-        '''
-        return self._pop_worker(0)
-
-    def next_request(self):
-        return self.requests.pop(0).get('msg')
-
-    def purge_requests(self):
-        new_requests = []
-        for e in self.requests:
-            if time.time() < e.get('expiry'): 
-                new_requests.append(e)
-            else:
-                print(f"[{ts()}] Request to service {self.name} expired | {e.get('msg')}")
-        self.requests = new_requests        
-
-    def purge_workers(self):
-        """Look for & kill workers that are not sending heartbeats"""
-        t = time.time()
-        expired_address = []
-        for i, e in enumerate(self.workers_expiry):
-            if t > e:  # Worker expired
-                expired_address.append(self.workers_address[i])
-        for address in expired_address:
-            print(f"[{ts()}] Worker {address} for service {self.name} expired" )
-            _ = self._pop_worker(self.workers_address.index(address))
-            
-    def purge(self):
-        self.purge_requests()
-        self.purge_workers()
-
-    def has_workers(self):
-        return len(self.workers_address) > 0
-
-    def has_requests(self):
-        # purge requests that are not being served
-        self.purge_requests()
-        return len(self.requests) > 0
-
-    def has_workers_and_requests(self):
-        return self.has_workers() and self.has_requests()
-
-class ZMQServiceBroker:
+    This wrapper intentionally keeps the API close to your original version.
     """
-    Service Queue
-    Workers register as providers of a service
-    Clients make requests to specific services
-    Service Queue routes from clients to the appropriate
-        worker and vice verse
-    """
-    def __init__(self, addr:str, timeo:int = 1000, stop_event:threading.Event = None):
-        '''
-        addr: address where to bind and receive comm from workers and clients
-        timeo: timeout for the poller
-        '''
-        self.addr = addr        
-        self.ctx = zmq.Context()
-        # declare router socket
-        self.socket = self.ctx.socket(zmq.ROUTER)
-        # set linger to close it without wait
-        self.socket.linger = 0
-        # bind the socket
-        self.socket.bind(addr)
-        # poll timeo
-        self.timeo = timeo        
-        # external stop signal
-        self.stop_event = stop_event if stop_event else threading.Event()
 
-        self.services = {}
+    def __init__(
+        self,
+        ctx: zmq.Context,
+        zmq_type: int,
+        timeo: float = DEFAULT_SOCKET_TIMEOUT,
+        identity: Optional[str] = None,
+        reconnect: bool = True,
+    ):
+        assert zmq_type in [zmq.REQ, zmq.REP, zmq.DEALER], "ZMQR must use REQ, REP, or DEALER"
+        self.timeo_ms = int(1000 * timeo)
+        self.ctx = ctx
+        self.socket: Optional[zmq.Socket] = None
+        self.identity = identity or create_identity()
+        self.zmq_type = zmq_type
+        self.addr: List[str] = []
+        self.bind_addr = ""
+        self.binded = False
+        self.reconnect = reconnect
 
+    def set_identity(self, identity: Optional[str] = None) -> None:
+        self.identity = identity or create_identity()
+        if self.socket and self.identity:
+            self.socket.setsockopt_string(zmq.IDENTITY, self.identity)
 
-    # send/receive methods
-    def _decode(self, msg:list) -> list:
-        return [e.decode() for e in msg]
+    def _build_socket(self) -> None:
+        if self.socket is not None:
+            self.close()
+        self.socket = self.ctx.socket(self.zmq_type)
+        if self.identity:
+            self.socket.setsockopt_string(zmq.IDENTITY, self.identity)
+        self.socket.setsockopt(zmq.LINGER, 0)
 
-    def _encode(self, msg:list) -> list:
-        return [e.encode() for e in msg]
+    def bind(self, addr: Optional[str] = None) -> None:
+        self.bind_addr = addr or self.bind_addr
+        if not self.bind_addr:
+            raise ValueError("bind address is empty")
+        self.binded = True
+        self._build_socket()
+        assert self.socket is not None
+        self.socket.bind(self.bind_addr)
 
-    def recv(self) -> list:
-        '''
-        recv_multipart and decode
-        '''
-        if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-            msg = self.socket.recv_multipart()
-            return self._decode(msg)
+    def _connect(self, addr: Optional[str] = None) -> None:
+        if self.binded:
+            raise RuntimeError("trying to connect a socket that was bound")
+        if addr and addr not in self.addr:
+            self.addr.append(addr)
+        if not self.addr:
+            raise ValueError("connect address list is empty")
+        self._build_socket()
+        assert self.socket is not None
+        for item in self.addr:
+            self.socket.connect(item)
+
+    def connect(self, addr: Optional[str] = None) -> None:
+        self._connect(addr)
+
+    def _reconnect(self) -> None:
+        if not self.reconnect:
+            return
+        if self.binded:
+            self.bind()
+        else:
+            self.connect()
+
+    def close(self) -> None:
+        if self.socket is not None:
+            self.socket.close(linger=0)
+            self.socket = None
+
+    def send(self, msg: Union[str, bytes], timeo: Optional[float] = None) -> bool:
+        if self.socket is None:
+            raise RuntimeError("socket is not connected/bound")
+        timeout_ms = int(1000 * timeo) if timeo is not None else self.timeo_ms
+        if self.socket.poll(timeout_ms, zmq.POLLOUT) & zmq.POLLOUT:
+            self.socket.send(encode_msg(msg))
+            return True
+        if self.zmq_type == zmq.REP:
+            self._reconnect()
+        return False
+
+    def send_multipart(self, msg: List[Union[str, bytes]], timeo: Optional[float] = None) -> bool:
+        if self.socket is None:
+            raise RuntimeError("socket is not connected/bound")
+        timeout_ms = int(1000 * timeo) if timeo is not None else self.timeo_ms
+        if self.socket.poll(timeout_ms, zmq.POLLOUT) & zmq.POLLOUT:
+            self.socket.send_multipart(encode_msg(msg))
+            return True
+        if self.zmq_type == zmq.REP:
+            self._reconnect()
+        return False
+
+    def recv(self, timeo: Optional[float] = None) -> Optional[str]:
+        if self.socket is None:
+            raise RuntimeError("socket is not connected/bound")
+        timeout_ms = int(1000 * timeo) if timeo is not None else self.timeo_ms
+        if self.socket.poll(timeout_ms, zmq.POLLIN) & zmq.POLLIN:
+            return decode_msg(self.socket.recv())  # type: ignore[return-value]
+        if self.zmq_type in [zmq.REQ, zmq.DEALER]:
+            self._reconnect()
         return None
 
-    def send(self, msg:list) -> int:
-        '''
-        msg: list of strings
-        '''
-        # check if we can send - make poll with a timeout for the operation to write
-        if (self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT) != 0:
+    def recv_multipart(self, timeo: Optional[float] = None) -> Optional[List[str]]:
+        if self.socket is None:
+            raise RuntimeError("socket is not connected/bound")
+        timeout_ms = int(1000 * timeo) if timeo is not None else self.timeo_ms
+        if self.socket.poll(timeout_ms, zmq.POLLIN) & zmq.POLLIN:
+            return decode_msg(self.socket.recv_multipart())  # type: ignore[return-value]
+        if self.zmq_type in [zmq.REQ, zmq.DEALER]:
+            self._reconnect()
+        return None
+
+
+# -----------------------------------------------------------------------------
+# Broker internals
+# -----------------------------------------------------------------------------
+
+@dataclass
+class PendingRequest:
+    client_id: str
+    payload: str
+    req_id: str
+    expiry: float
+
+
+@dataclass
+class InFlightRequest:
+    worker_id: str
+    client_id: str
+    req_id: str
+    payload: str
+    expiry: float
+
+
+class ZMQServiceBrokerService:
+    """State for one service name."""
+
+    def __init__(
+        self,
+        name: str,
+        request_ttl: float = DEFAULT_REQUEST_TTL,
+        max_pending_requests: int = DEFAULT_MAX_PENDING_REQUESTS,
+    ):
+        self.name = name
+        self.request_ttl = request_ttl
+        self.max_pending_requests = max_pending_requests
+
+        self.requests: Deque[PendingRequest] = deque()
+        self.ready_workers: Deque[str] = deque()
+        self.worker_expiry: Dict[str, float] = {}
+        self.known_workers = set()
+        self.inflight_by_worker: Dict[str, InFlightRequest] = {}
+
+    def add_request(self, client_id: str, req_id: str, payload: str) -> Optional[str]:
+        if len(self.requests) >= self.max_pending_requests:
+            return f"service {self.name!r} queue is full"
+        self.requests.append(
+            PendingRequest(
+                client_id=client_id,
+                req_id=req_id,
+                payload=payload,
+                expiry=time.time() + self.request_ttl,
+            )
+        )
+        return None
+
+    def add_worker(self, worker_id: str) -> None:
+        if worker_id not in self.known_workers:
+            print(f"New worker {worker_id} for service {self.name}")
+            self.known_workers.add(worker_id)
+
+        self.worker_expiry[worker_id] = time.time() + COMM_HEARTBEAT_INTERVAL*COMM_WORKER_EXPIRY_FACTOR
+
+        # A worker that contacts us is ready again. Remove stale duplicate readiness.
+        try:
+            self.ready_workers.remove(worker_id)
+        except ValueError:
+            pass
+        self.ready_workers.append(worker_id)
+
+        # If the worker replied or heartbeated after an in-flight timeout, clear stale state.
+        self.inflight_by_worker.pop(worker_id, None)
+
+    def mark_worker_busy(self, worker_id: str, req: PendingRequest) -> None:
+        self.inflight_by_worker[worker_id] = InFlightRequest(
+            worker_id=worker_id,
+            client_id=req.client_id,
+            req_id=req.req_id,
+            payload=req.payload,
+            expiry=time.time() + self.request_ttl,
+        )
+
+    def next_worker(self) -> str:
+        return self.ready_workers.popleft()
+
+    def next_request(self) -> PendingRequest:
+        return self.requests.popleft()
+
+    def has_workers_and_requests(self) -> bool:
+        return bool(self.ready_workers) and bool(self.requests)
+
+    def has_workers(self) -> bool:
+        return bool(self.ready_workers or self.worker_expiry or self.inflight_by_worker)
+
+    def purge_expired_requests(self) -> List[Tuple[str, str]]:
+        """Drop expired queued requests and return client errors to send."""
+        now = time.time()
+        kept: Deque[PendingRequest] = deque()
+        expired: List[Tuple[str, str]] = []
+
+        while self.requests:
+            req = self.requests.popleft()
+            if now <= req.expiry:
+                kept.append(req)
+            else:
+                expired.append((req.client_id, req.req_id, f"request to service {self.name!r} expired before dispatch"))
+
+        self.requests = kept
+        return expired
+
+    def purge_expired_workers(self) -> List[PendingRequest]:
+        """Remove dead workers DO NOT requeue their in-flight work, if any."""
+        now = time.time()
+        requeue: List[PendingRequest] = []
+        expired_workers = [worker_id for worker_id, expiry in self.worker_expiry.items() if now > expiry]
+
+
+        for worker_id in expired_workers:
+            if worker_id not in self.inflight_by_worker:
+                print(f"Worker {worker_id} for service {self.name} expired")
+                self.worker_expiry.pop(worker_id, None)
+                self.known_workers.discard(worker_id)
+                try:
+                    self.ready_workers.remove(worker_id)
+                except ValueError:
+                    pass
+
+                inflight = self.inflight_by_worker.pop(worker_id, None)
+                #if inflight and now <= inflight.expiry:
+                #    requeue.append(
+                #        PendingRequest(
+                #            client_id=inflight.client_id,
+                #            payload=inflight.payload,
+                #            req_id=inflight.req_id,
+                #            expiry=inflight.expiry,
+                #        )
+                #    )
+
+        #for req in reversed(requeue):
+        #    self.requests.appendleft(req)
+
+        return requeue
+
+    def purge_expired_inflight(self) -> List[Tuple[str, str]]:
+        """Fail requests that were sent to a worker but never got a reply."""
+        now = time.time()
+        failed: List[Tuple[str, str]] = []
+        expired_workers = [
+            worker_id for worker_id, req in self.inflight_by_worker.items() if now > req.expiry
+        ]
+        for worker_id in expired_workers:
+            req = self.inflight_by_worker.pop(worker_id)
+            failed.append((req.client_id, req.req_id, f"request to service {self.name!r} timed out while processing"))
+        return failed
+
+    def purge(self) -> List[Tuple[str, str]]:
+        errors = []
+        errors.extend(self.purge_expired_requests())
+        self.purge_expired_workers()
+        errors.extend(self.purge_expired_inflight())
+        return errors
+
+
+# -----------------------------------------------------------------------------
+# Broker
+# -----------------------------------------------------------------------------
+
+class ZMQServiceBroker:
+    """ROUTER broker that routes client requests to service workers."""
+
+    def __init__(
+        self,
+        addr: str,
+        timeo: int = 1000,
+        stop_event: Optional[threading.Event] = None,
+        request_ttl: float = DEFAULT_REQUEST_TTL,
+        max_pending_requests: int = DEFAULT_MAX_PENDING_REQUESTS,
+    ):
+        self.addr = addr
+        self.ctx = zmq.Context()
+        self.socket = self.ctx.socket(zmq.ROUTER)
+        self.socket.setsockopt(zmq.LINGER, 0)
+        self.socket.bind(addr)
+
+        self.timeo = timeo
+        self.stop_event = stop_event or threading.Event()
+        self.request_ttl = request_ttl
+        self.max_pending_requests = max_pending_requests
+        self.services: Dict[str, ZMQServiceBrokerService] = {}
+
+    def _decode(self, msg: List[bytes]) -> List[str]:
+        return [decode_frame(e) for e in msg]
+
+    def _encode(self, msg: List[Union[str, bytes]]) -> List[bytes]:
+        return [encode_frame(e) for e in msg]
+
+    def recv(self) -> Optional[List[str]]:
+        if self.socket.poll(self.timeo, zmq.POLLIN) & zmq.POLLIN:
+            return self._decode(self.socket.recv_multipart())
+        return None
+
+    def send(self, msg: List[Union[str, bytes]]) -> bool:
+        if self.socket.poll(self.timeo, zmq.POLLOUT) & zmq.POLLOUT:
             self.socket.send_multipart(self._encode(msg))
-            return 1
-        return 0
+            return True
+        print(f"Broker send timeout for message with first frames: {msg[:3]}")
+        return False
 
-    def require_service(self, service:str):
-        if not self.has_service(service):        
-            # print(f"[{ts()}] Registering service {service}")    
-            self.services[service] = ZMQServiceBrokerService(service)
-        return self.services[service]
+    def send_client_reply(self, client_id: str, req_id:str, payload: str) -> None:
+        self.send([client_id, req_id, payload])
 
-    def has_service(self, service:str):
-        return service in self.services
+    def send_client_error(self, client_id: str, req_id:str, error: str) -> None:
+        self.send([client_id, req_id, f"{COMM_TYPE_ERROR}:{error}"])
 
-    def purge(self):
-        to_del = []
-        for name, service in self.services.items():
-            service.purge()
-            if not service.has_workers(): to_del.append(name)
-        # purge the services without workers left if we are not allowed
-        # to create services on client requests 
-        # if not self.create_service_on_client:
-        # for name in to_del: 
-        #     print(f"Unegistering service {name} because there are no workers left")    
-        #     self.services.pop(name)
+    def require_service(self, service_name: str) -> ZMQServiceBrokerService:
+        if service_name not in self.services:
+            self.services[service_name] = ZMQServiceBrokerService(
+                service_name,
+                request_ttl=self.request_ttl,
+                max_pending_requests=self.max_pending_requests,
+            )
+        return self.services[service_name]
 
-    def dispatch(self, service:ZMQServiceBrokerService, msg:str = None):
-        """Dispatch requests to waiting workers as possible"""
-        # Queue message
-        if msg is not None:
-            service.add_request(msg)                    
-        # dispatch all message while there are requests and workers
-        while service.has_workers_and_requests():            
-            msg = service.next_request()
-            address = service.next_worker()
-            self.send([address, COMM_TYPE_REQ]+msg)
+    def dispatch(self, service: ZMQServiceBrokerService) -> None:
+        while service.has_workers_and_requests():
+            req = service.next_request()
+            worker_id = service.next_worker()
+            service.mark_worker_busy(worker_id, req)
+            ok = self.send([worker_id, COMM_TYPE_REQ, req.client_id, req.req_id, req.payload])
+            #if not ok:
+            #    # If we could not send, put the request back.
+            #    service.requests.appendleft(req)
+            #    service.inflight_by_worker.pop(worker_id, None)
+            #    break
 
-    def serve(self):
-        print(f'[{ts()}] Starting ZMQServiceBroker on {self.addr}')
-        while not self.stop_event.isSet():            
-            try:
-                msg = self.recv()
-                if msg:  
-                    # parse message
-                    # if client
-                    # msg ~ [sender identity, '', header, service, msg]
-                    # if worker
-                    # msg ~ [sender identity, '', header, comm_type, service, <client id>, msg]
-                    
-                    # parse sender address 
-                    sender = msg.pop(0)
-                    # there is an empty string then (dealer socket make the messages to match this)
-                    empty = msg.pop(0)
-                    # parse header info (distinguish between client and worker comm)
-                    header = msg.pop(0)
-                    
-                    # got a msg from a client
-                    if (header == COMM_HEADER_CLIENT):
-                        # at this point client messages must contain
-                        # the target service and the payload
-                        if len(msg) == 2:
-                            service, msg = msg
-                            # add sender to msg
-                            msg = [sender, msg]
-                            # dispatch to service
-                            self.dispatch(self.require_service(service), msg)
+    def purge(self) -> None:
+        empty_services = []
+        for service_name, service in self.services.items():
+            errors = service.purge()
+            for client_id, req_id, error in errors:
+                print(client_id, req_id, error)
+                self.send_client_error(client_id, req_id, error)
+            if not service.has_workers() and not service.requests:
+                empty_services.append(service_name)
 
-                            # if not self.create_service_on_client and not self.has_service(service):
-                            #     self.send([sender, '', 'ERROR'])
-                            # else:
-                            #     self.dispatch(self.require_service(service), msg)                    
-                        else:
-                            print(f"[{ts()}] Invalid message from client")
+        for service_name in empty_services:
+            self.services.pop(service_name, None)
 
-                    # got a msg from a worker                    
-                    elif (header == COMM_HEADER_WORKER):
-                        # at this point, worker messages must contain
-                        # info about the type of communication that they are
-                        # making and info about their own service
-                        #
-                        comm_type = msg.pop(0)
-                        service = msg.pop(0)
+    def handle_client_message(self, sender: str, frames: List[str]) -> None:
+        # Expected after header: [service, payload]
+        if len(frames) != 3:
+            self.send_client_error(sender, 'UNK', "invalid client message format")
+            return
 
-                        # reset the service because we just received a new message 
-                        # from it, it is ready for new payloads
-                        service = self.require_service(service)
-                        service.add_worker(sender)
-
-                        # reply to heartbeat
-                        if comm_type == COMM_TYPE_HEARTBEAT:
-                            msg = [sender, COMM_TYPE_HEARTBEAT, COMM_MSG_HEARTBEAT]
-                            self.send(msg)
-
-                        # send back to the client                            
-                        elif comm_type == COMM_TYPE_REP:
-                            # here, now message should be like [client id, msg]
-                            # to route the reply to the appropriate client
-                            if len(msg) == 2:
-                                # add the empty string to match between dealer and req sockets
-                                self.send([msg[0], '', msg[1]])
-                            else:
-                                print(f"[{ts()}] Wrong format reply message from worker")                            
-                        else:
-                            print(f'[{ts()}] Unknown message from worker')
-                        # dispatch worker to worker on pending payloads
-                        self.dispatch(service)                           
-                    else:
-                        raise Exception("Invalid message header")
-                # delete expired workers
-                self.purge()
-
-            except KeyboardInterrupt:
-                print(f'[{ts()}] ZMQServiceBroker KeyboardInterrupt. ')
-                break
-            except Exception as e:
-                print(f'[{ts()}] ZMQServiceBroker error: ', e)
-                break # Interrupted
+        service_name, reqid, payload = frames
         
-        print(f'[{ts()}] terminating ZMQServiceBroker...')
-        # close socket
-        self.socket.close()
-        # destroy context
-        self.ctx.destroy()
-        print(f'[{ts()}] ZMQServiceBroker on {self.addr} terminated')
+        service = self.require_service(service_name)
+        error = service.add_request(sender, reqid, payload)
+        if error:
+            self.send_client_error(sender, 'UNK', error)
+            return
+        self.dispatch(service)
 
+    def handle_worker_message(self, sender: str, frames: List[str]) -> None:
+        # Expected after header: [comm_type, service, ...]
+        if len(frames) < 2:
+            print(f"Invalid worker message from {sender}: {frames}")
+            return
+
+        comm_type = frames.pop(0)
+        service_name = frames.pop(0)
+        service = self.require_service(service_name)
+        service.add_worker(sender)
+
+        if comm_type == COMM_TYPE_HEARTBEAT:
+            self.send([sender, COMM_TYPE_HEARTBEAT, COMM_MSG_HEARTBEAT])
+
+        elif comm_type == COMM_TYPE_REP:
+            # Expected remaining frames: [client_id, payload]
+            if len(frames) != 3:
+                print(f"Wrong reply format from worker {sender}: {frames}")
+            else:
+                client_id, req_id, payload = frames
+                self.send_client_reply(client_id, req_id, payload)
+
+        else:
+            print(f"Unknown worker comm_type from {sender}: {comm_type}")
+
+        self.dispatch(service)
+
+    def handle_message(self, msg: List[str]) -> None:
+        # ROUTER receives: [sender, '', header, ...] from REQ clients.
+        # DEALER workers send: [sender, '', header, ...] if they include leading ''.
+        # DEALER can also send [sender, header, ...], so normalize optional empty frame.
+        if len(msg) < 3:
+            print(f"Invalid short message: {msg}")
+            return
+
+        sender = msg.pop(0)
+        if msg and msg[0] == "":
+            msg.pop(0)
+
+        if not msg:
+            print(f"Invalid empty message body from {sender}", )
+            return
+
+        header = msg.pop(0)
+        if header == COMM_HEADER_CLIENT:
+            self.handle_client_message(sender, msg)
+        elif header == COMM_HEADER_WORKER:
+            self.handle_worker_message(sender, msg)
+        else:
+            print(f"Invalid message header from {sender}: {header}")
+
+    def serve(self) -> None:
+        print(f"Starting ZMQServiceBroker on {self.addr}")
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    msg = self.recv()
+                    if msg:
+                        self.handle_message(msg)
+                    self.purge()
+                except KeyboardInterrupt:
+                    print("ZMQServiceBroker KeyboardInterrupt")
+                    break
+                except zmq.ZMQError:
+                    print("ZMQ error in broker loop")
+                    # Keep serving unless the context/socket has been closed by shutdown.
+                    if self.stop_event.is_set():
+                        break
+                except Exception as e:
+                    # Production hardening: log bad input/state, but do not kill the broker.
+                    print("Unexpected broker error: ", e)
+        finally:
+            print(f"Terminating ZMQServiceBroker on {self.addr}")
+            self.socket.close(linger=0)
+            self.ctx.term()
+            print(f"ZMQServiceBroker on {self.addr} terminated")
+
+
+# -----------------------------------------------------------------------------
+# Worker
+# -----------------------------------------------------------------------------
 
 class ZMQServiceBrokerWorker(ZMQR):
-    # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context, service:str, worker_info: bool = False):
-        '''
-        '''
-        ZMQR.__init__(
-                        self, 
-                        ctx = ctx, 
-                        zmq_type = zmq.DEALER, 
-                        timeo = COMM_HEARTBEAT_INTERVAL/10, 
-                        identity = None, 
-                        reconnect = False
-                        )                
+    def __init__(self, ctx: zmq.Context, service: str, worker_info: bool = False):
+        super().__init__(
+            ctx=ctx,
+            zmq_type=zmq.DEALER,
+            timeo=COMM_HEARTBEAT_INTERVAL / 10,
+            identity=create_identity("W-"),
+            reconnect=False,
+        )
         self.service = service
         self.worker_info = worker_info
-        self.ping_t = None        
-        self.pong_at = None
+        self.ping_t = 0.0
+        self.pong_t = 0.0
         self.queue_alive = False
-    
-    def connect(self, addr:str = None):
-        '''
-        connect the socket
-        send message that is ready
-        '''
-        # # create new identity
-        self.set_identity(create_identity())
-        # use the private method
+
+    def connect(self, addr: Optional[str] = None) -> None:
+        self.set_identity(create_identity("W-"))
         self._connect(addr)
-        if self.worker_info: print(f"[{ts()}] ZMQServiceBrokerWorker worker {self.identity} for service {self.service} ready")
-        self.ping_t = time.time()
-        self.pong_t = time.time()
+        if self.worker_info:
+            print(f"Worker {self.identity} for service {self.service} ready")
+        now = time.time()
+        self.ping_t = now
+        self.pong_t = now
         self.queue_alive = False
         self.send_heartbeat()
 
-    def send_heartbeat(self):
-        self.send_multipart(['',COMM_HEADER_WORKER, COMM_TYPE_HEARTBEAT, self.service, COMM_MSG_HEARTBEAT])
+    def send_heartbeat(self) -> bool:
+        return self.send_multipart([
+            "",
+            COMM_HEADER_WORKER,
+            COMM_TYPE_HEARTBEAT,
+            self.service,
+            COMM_MSG_HEARTBEAT,
+        ])
 
-    def recv_work(self):
-        '''
-        receive work and handle heartbeats
-        should receive a multipart message
-        like ['client addr/identity','','request']
-        '''
-        # is a message is not received in this time it means that the queue is dead
-        # keeps reconnecting
+    def recv_work(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Receive one unit of work.
+
+        Returns:
+            (client_id, payload), or (None, None) if only heartbeat/no message.
+        """
         msg = self.recv_multipart()
-        clientid = None
+        client_id = None
+        req_id = None
+        payload = None
+
         if msg:
-            comm_type = msg.pop(0)
-            # if we get something means that the queue is up
             self.queue_alive = True
             self.pong_t = time.time()
-            # received a message with work
-            if comm_type == COMM_TYPE_REQ:
-                clientid, msg = msg[0], msg[1]
-            
+
+            comm_type = msg.pop(0)
+            if comm_type == COMM_TYPE_REQ and len(msg) == 3:
+                client_id, req_id, payload = msg[0], msg[1], msg[2]
+
             elif comm_type == COMM_TYPE_HEARTBEAT:
-                msg = msg.pop(0)
-                if msg != COMM_MSG_HEARTBEAT:
-                    print(f"[{ts()}] Unknown heartbeat message from queue")                
-                msg, clientid = None, None
+                pass
             else:
-                # received a pong/other message with a unknown format
-                print(f"[{ts()}] Unknown message format from queue")
-                msg, clientid = None, None
+                print(f"Unknown message from queue to worker {self.identity}: {comm_type} {msg}")
 
-        # queue is not responding condition
-        if not self.queue_alive and (time.time() - self.pong_t > COMM_HEARTBEAT_INTERVAL):
-            print(f"[{ts()}] Queue not responding to worker {self.identity}")
+        now = time.time()
+        if not self.queue_alive and now - self.pong_t > COMM_HEARTBEAT_INTERVAL:
+            print(f"Queue not responding to worker {self.identity}. Reconnecting...")
             self.connect()
-        else: 
-            # signal to the queue that worker is alive by pinging it
-            if time.time() > self.ping_t + COMM_HEARTBEAT_INTERVAL:
-                self.ping_t = time.time()
-                self.queue_alive = False
-                self.send_heartbeat()
-        return clientid, msg
+        elif now > self.ping_t + COMM_HEARTBEAT_INTERVAL:
+            self.ping_t = now
+            self.queue_alive = False
+            self.send_heartbeat()
 
-    def send_work(self, clientid:str, msg:str):
-        return self.send_multipart(['',COMM_HEADER_WORKER, COMM_TYPE_REP, self.service, clientid, msg])
+        return client_id, req_id, payload
 
+    def send_work(self, client_id: str, req_id:str, msg: str) -> bool:
+        return self.send_multipart([
+            "",
+            COMM_HEADER_WORKER,
+            COMM_TYPE_REP,
+            self.service,
+            client_id,
+            req_id,
+            msg,
+        ])
+
+
+# -----------------------------------------------------------------------------
+# Client
+# -----------------------------------------------------------------------------
 
 class ZMQServiceBrokerClient(ZMQR):
-    # should always receive and send in multipart because the queue need to handle the envelope
-    def __init__(self, ctx:zmq.Context, info:bool = True):
-        '''
-        '''
-        ZMQR.__init__(
-                        self, 
-                        ctx = ctx, 
-                        zmq_type = zmq.REQ, 
-                        timeo = COMM_HEARTBEAT_INTERVAL/10, 
-                        identity = create_identity(), 
-                        reconnect = True
-                        )                
+    def __init__(self, ctx: zmq.Context, info: bool = True):
+        super().__init__(
+            ctx=ctx,
+            zmq_type=zmq.DEALER, # REQ
+            timeo=COMM_HEARTBEAT_INTERVAL / 10,
+            identity=create_identity("C-"),
+            reconnect=True,
+        )
         self.info = info
 
-    def connect(self, addr:str = None):
-        '''
-        connect the socket
-        send message that is ready
-        '''
-        # create new identity
-        self.set_identity(create_identity())
-        # use the private method
-        self._connect(addr)        
-        if self.info: print(f"[{ts()}] Client to service queue {self.identity} ready")
-        
-    def req(self, service:str, msg:str, timeo:int = None):
-        return self.send_multipart([COMM_HEADER_CLIENT, service, msg], timeo = timeo)
+    def connect(self, addr: Optional[str] = None) -> None:
+        self.set_identity(create_identity("C-"))
+        self._connect(addr)
+        if self.info:
+            print(f"Client {self.identity} ready", self.identity)
 
-    def rep(self, timeo = None):
-        return self.recv(timeo = timeo) 
+    def req(self, service: str, msg: str, timeo: Optional[float] = None) -> bool:
+        reqid = create_identity("R-")
+        out = self.send_multipart([COMM_HEADER_CLIENT, service, reqid, msg], timeo=timeo)
+        if out: return reqid
+        return False
 
-    def request(self, service:str, msg:str):
-        '''
-        make a request to the queue
-        wait for reply
-        '''
-        status = self.send_multipart([COMM_HEADER_CLIENT, service, msg])
-        if status == 1:
-            # wait for reply
-            rep = self.recv()            
-            return rep
-        else:
-            print('Could not send request to service queue')
+
+    def rep(self, timeo: Optional[float] = None) -> Optional[dict]:
+        # reply with req_id, response
+        out = self.recv_multipart(timeo=timeo) # 
+        if isinstance(out, list):
+            if len(out) == 2:
+                return {'req_id':out[0], 'rep':out[1]}
+        return {'req_id':None, 'rep':None}
+
+    def request(self, service: str, msg: str, timeo: Optional[float] = None) -> Optional[str]:
+        status = self.req(service, msg, timeo=timeo)
+        if not status:
+            print("Could not send request to service queue")
             return None
+        return self.rep(timeo=timeo)
 
 
 
-
-if __name__ == '__main__':
-    ctx = zmq.Context()
-    s = ZMQReq(ctx)
-    s.connect("tcp://localhost:5555")
-    s.connect("tcp://localhost:5556")
-
-    s.send("ola")
-    msg = s.recv()
-    print(msg)
-    s.send("ola")
-    msg = s.recv()
-    print(msg)
-
-    s.close()
-    ctx.term()

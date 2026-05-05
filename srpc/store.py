@@ -353,10 +353,12 @@ class StoreClient(SRPCClient):
 
     def publish(self, topic:str, msg:str):
         return self.srpc_client.invoque(service = self.service_name, method = 'publish', args = [], kwargs = {'topic':topic, 'msg':msg}, close = False)
+
         
 def test_server():
     server = Store(service_name = 'Store')  
     server.serve()
+
 
 def test_client():
    

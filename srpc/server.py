@@ -10,12 +10,12 @@ try:
     from .utils import SRPCTopic, clear_screen
     from .utils import build_server_response, OK_STATUS, ERROR_STATUS
     from .registry_client import RegistryClient
-    from .custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string, create_identity
+    from .custom_zmq import ZMQPub, ZMQServiceBrokerWorker
 except ImportError:
     from utils import SRPCTopic, clear_screen, build_server_response
     from utils import build_server_response, OK_STATUS, ERROR_STATUS
     from registry_client import RegistryClient
-    from custom_zmq import ZMQR, ZMQPub, ZMQServiceBrokerWorker, generate_random_string, create_identity
+    from custom_zmq import ZMQPub, ZMQServiceBrokerWorker 
 
 try:
     from .defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
@@ -67,7 +67,7 @@ class SRPCServer:
         # self._req_queue = None
         
         # build workers addr
-        # self._worker_addr = "inproc://"+generate_random_string(8)
+        # self._worker_addr = "inproc://(8)
 # 
 #     def registry_heartbeat(self):
 #         client = RegistryClient(req_addr = self._registry_addr)
@@ -147,10 +147,11 @@ class SRPCServer:
         worker_identity = self._thread_names.get(threading.get_ident(), 'UNKNOWN WORKER IDENTITY. THIS SHOULD NOT HAPPEN')
         if self._worker_info: print(f'[{dt.datetime.now()}] Worker id={worker_identity} for service {self._name}: {msg}')
 
-    def base_worker(self):
+
+    def base_worker_working(self):
         # base worker should create its socket
 
-        # worker_identity = create_identity()
+        # worker_identity = ()
         worker_socket = ZMQServiceBrokerWorker(self.ctx, service = self._name, worker_info = self._worker_info)
         worker_socket.connect(self._broker_addr)
         
@@ -180,6 +181,48 @@ class SRPCServer:
                         print('SRPCServer error: ', e)
                         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
                         worker_socket.send_work(clientid, rep)
+            except Exception as e:
+                print('Error in base_worker: ', e)
+                break        
+        # do not terminate the context as it is shared
+        worker_socket.close()
+        self.worker_print(msg = f'Worker terminated.')
+
+
+
+    def base_worker(self):
+        # base worker should create its socket
+
+        # worker_identity = ()
+        worker_socket = ZMQServiceBrokerWorker(self.ctx, service = self._name, worker_info = self._worker_info)
+        worker_socket.connect(self._broker_addr)
+        
+        # add a thread name
+        thread_id = threading.get_ident()
+        self._thread_names[thread_id] = worker_socket.identity
+
+        while not self.stop_event.isSet():            
+            try:
+                clientid, reqid, req = worker_socket.recv_work()
+                if req is not None:            
+                    try:
+                        # req to json
+                        req = json.loads(req)                        
+                        self.worker_print(msg = f'Request: {req}')
+                        if self._thread_safe:
+                            with self._thread_safe_lock:
+                                rep = self.handle_request(req)    
+                        else:
+                            rep = self.handle_request(req)
+                        rep = json.dumps(rep)
+                        worker_socket.send_work(clientid, reqid, rep)
+                    except json.JSONDecodeError:
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = 'Invalid json')     
+                        worker_socket.send_work(clientid, reqid, rep)
+                    except Exception as e:
+                        print('SRPCServer error: ', e)
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = str(e))   
+                        worker_socket.send_work(clientid, reqid, rep)
             except Exception as e:
                 print('Error in base_worker: ', e)
                 break        
@@ -279,6 +322,6 @@ def test_server():
 
 
 if __name__ == "__main__":
-    # print(create_identity())
+    # print(())
     test_server()
 

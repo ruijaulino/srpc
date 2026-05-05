@@ -3,12 +3,12 @@ import json
 import time
 import datetime as dt
 try:
-    from .custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQSub, ZMQServiceBrokerClient
+    from .custom_zmq import ZMQSub, ZMQServiceBrokerClient
     from .utils import build_server_response, OK_STATUS, ERROR_STATUS
     from .defaults import NO_REP_MSG, NO_REQ_MSG
     from .defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
 except ImportError:
-    from custom_zmq import ZMQR, ZMQP, ZMQReliableQueue, ZMQReliableQueueWorker, ZMQSub, ZMQServiceBrokerClient
+    from custom_zmq import ZMQSub, ZMQServiceBrokerClient
     from utils import build_server_response, OK_STATUS, ERROR_STATUS
     from defaults import NO_REP_MSG, NO_REQ_MSG
     from defaults import BROKER_ADDR, PROXY_PUB_ADDR, PROXY_SUB_ADDR
@@ -76,7 +76,10 @@ class SRPCClient:
             topic, msg = -1, None
         return topic, msg
 
-    def call(self, service, method, args = [], kwargs = {}, close:bool = False):
+    def call_working(self, service, method, args = [], kwargs = {}, close:bool = False):
+        '''
+        call a method on a service and wait for response
+        '''
         req = {
                 "method": method,
                 "args": args,
@@ -84,11 +87,10 @@ class SRPCClient:
             }
         req = json.dumps(req)
         # Send the request
-        status = self._broker_client.req(service = service, msg = req, timeo = self._timeo)
-        if status == 1:
-            rep = self._broker_client.rep(timeo = self._timeo)
-            
-            # print(rep)
+        req_id = self._broker_client.req(service = service, msg = req, timeo = self._timeo)
+        # reply with the request id associated!
+        if req_id:
+            rep = self._broker_client.rep(timeo = self._timeo)                        
             if rep is not None:                
                 if rep != "ERROR":
                     rep = json.loads(rep)
@@ -111,12 +113,134 @@ class SRPCClient:
         else:
             return rep.get('error_msg')
 
-    def invoque(self, service, method, args = [], kwargs = {}, close = False):
+    def call(self, service, method, args = [], kwargs = {}):
+        '''
+        call a method on a service
+        '''
+        req = {
+                "method": method,
+                "args": args,
+                "kwargs": kwargs
+            }
+        req = json.dumps(req)
+        # Send the request
+        req_id = self._broker_client.req(service = service, msg = req, timeo = self._timeo)
+        return req_id
+
+    def collect_(self, req_id = None, close = False):
+        # if req_id is not None then we need the output to be equal. do not use this when requesting asynch!
+        # this is just being used to check if the requests made with collect are correct!
+
+        # get request
+        rep = self._broker_client.rep(timeo = self._timeo)                                
+        # output should be a dict
+        if isinstance(rep, dict):
+            if req_id is not None:
+                if rep.get('req_id') == req_id:
+                    rep = rep.get('rep')
+                    if rep != "ERROR":
+                        rep = json.loads(rep)
+                    else:
+                        rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)                    
+                else:                    
+                    print('WARNING: RECEIVING RESPONSES TO A REQUEST THAT WAS NOT MADE. PROBABLY THERE ARE MESSAGES STUCK IN THE SOCKET. RESET')
+                    rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
+            else:
+                # this is to collect message, output here is different
+                req_id = rep.get('req_id')                
+                rep = rep.get('rep')
+                if rep != "ERROR":
+                    rep = json.loads(rep)
+                else:
+                    rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)                    
+                rep = {'req_id':req_id, 'output':self.parse(rep)}
+        else:
+            if req_id is not None:
+                # this should emulate the response from the server
+                rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
+            # when collecting...
+            else:
+                rep = {'req_id':req_id, 'output':self.no_rep_msg}
+        if close: self.close()
+        return rep
+
+    def collect(self, close = False):
+        return self.collect_(None, close)
+
+    def invoque(self, service, method, collect = True, args = [], kwargs = {}, close = False):
         s = time.time()
-        out = self.parse(self.call(service, method, args, kwargs, close))
+        if close: collect = True
+        req_id = self.call(service, method, args, kwargs)
+        
+        if collect:
+            
+            out = self.parse(self.collect_(req_id, close))
+        else:
+            out = self.no_req_msg
+            if req_id is not None:
+                out = req_id                 
         if self.info:
             print(f'[{ts()}] Time to invoque method {method} on service {service}: {time.time()-s} [secs]')
+        
         return out
+
+
+    # def call(self, service, method, args = [], kwargs = {}, close:bool = False):
+    #     '''
+    #     call a method on a service
+    #     '''
+    #     req = {
+    #             "method": method,
+    #             "args": args,
+    #             "kwargs": kwargs
+    #         }
+    #     req = json.dumps(req)
+    #     # Send the request
+    #     req_id = self._broker_client.req(service = service, msg = req, timeo = self._timeo)
+    #     # reply with the request id associated!
+    #     if req_id:
+    #         rep = self._broker_client.rep(timeo = self._timeo)                        
+    #         # output should be a dict
+    #         if isinstance(rep, dict):
+    #             # check if we are getting the response to the same request that was made
+    #             if rep.get('req_id') == req_id:
+    #                 rep = rep.get('rep')
+    #                 if rep != "ERROR":
+    #                     rep = json.loads(rep)
+    #                 else:
+    #                     rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)    
+    #             else:
+    #                 print('WARNING: RECEIVING RESPONSES TO A REQUEST THAT WAS NOT MADE. PROBABLY THERE ARE MESSAGES STUCK IN THE SOCKET. RESET')
+    #                 rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
+    #         else:
+    #             # this should emulate the response from the server
+    #             rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_rep_msg)
+    #     else:
+    #         # this should emulate the response from the server
+    #         rep = build_server_response(status = ERROR_STATUS, output = None, error_msg = self.no_req_msg)
+    #     if close: self.close()
+    #     return rep
+
+
+    # # implement a method to parse the responses from the server
+    # # this seems to be practical
+    # def parse(self, rep):
+    #     if rep.get('status') == OK_STATUS:
+    #         return rep.get('output')
+    #     else:
+    #         return rep.get('error_msg')
+
+    # def collect(self, ):
+    #     pass
+
+    # def invoque(self, service, method, args = [], kwargs = {}, close = False):
+    #     s = time.time()
+    #     out = self.parse(self.call(service, method, args, kwargs, close))
+    #     if self.info:
+    #         print(f'[{ts()}] Time to invoque method {method} on service {service}: {time.time()-s} [secs]')
+    #     return out
+
+
 
 
 def test_client():
