@@ -215,6 +215,7 @@ class SRPCClient:
 
     def receive_any(
         self,
+        timeo = None,
         close: bool = False,
     ) -> dict:
         """
@@ -227,7 +228,7 @@ class SRPCClient:
             }
         """
         try:
-            reply = self._broker_client.rep(timeo=self._timeo)
+            reply = self._broker_client.rep(timeo=timeo or self._timeo)
 
             if reply is None:
                 return {
