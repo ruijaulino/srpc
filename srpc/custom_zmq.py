@@ -771,11 +771,50 @@ class ZMQServiceBrokerWorker(ZMQR):
 # Client
 # -----------------------------------------------------------------------------
 
+# class ZMQServiceBrokerClient(ZMQR):
+#     def __init__(self, ctx: zmq.Context, info: bool = True):
+#         super().__init__(
+#             ctx=ctx,
+#             zmq_type=zmq.DEALER, # REQ
+#             timeo=COMM_HEARTBEAT_INTERVAL / 10,
+#             identity=create_identity("C-"),
+#             reconnect=True,
+#         )
+#         self.info = info
+
+#     def connect(self, addr: Optional[str] = None) -> None:
+#         self.set_identity(create_identity("C-"))
+#         self._connect(addr)
+#         if self.info:
+#             print(f"Client {self.identity} ready", self.identity)
+
+#     def req(self, service: str, msg: str, timeo: Optional[float] = None) -> bool:
+#         reqid = create_identity("R-")
+#         out = self.send_multipart([COMM_HEADER_CLIENT, service, reqid, msg], timeo=timeo)
+#         if out: return reqid
+#         return False
+
+
+#     def rep(self, timeo: Optional[float] = None) -> Optional[dict]:
+#         # reply with req_id, response
+#         out = self.recv_multipart(timeo=timeo) # 
+#         if isinstance(out, list):
+#             if len(out) == 2:
+#                 return {'req_id':out[0], 'rep':out[1]}
+#         return {'req_id':None, 'rep':None}
+
+#     def request(self, service: str, msg: str, timeo: Optional[float] = None) -> Optional[str]:
+#         status = self.req(service, msg, timeo=timeo)
+#         if not status:
+#             print("Could not send request to service queue")
+#             return None
+#         return self.rep(timeo=timeo)
+
 class ZMQServiceBrokerClient(ZMQR):
     def __init__(self, ctx: zmq.Context, info: bool = True):
         super().__init__(
             ctx=ctx,
-            zmq_type=zmq.DEALER, # REQ
+            zmq_type=zmq.DEALER,
             timeo=COMM_HEARTBEAT_INTERVAL / 10,
             identity=create_identity("C-"),
             reconnect=True,
@@ -785,30 +824,78 @@ class ZMQServiceBrokerClient(ZMQR):
     def connect(self, addr: Optional[str] = None) -> None:
         self.set_identity(create_identity("C-"))
         self._connect(addr)
+
         if self.info:
-            print(f"Client {self.identity} ready", self.identity)
+            print(f"Client {self.identity} ready")
 
-    def req(self, service: str, msg: str, timeo: Optional[float] = None) -> bool:
-        reqid = create_identity("R-")
-        out = self.send_multipart([COMM_HEADER_CLIENT, service, reqid, msg], timeo=timeo)
-        if out: return reqid
-        return False
+    def req(
+        self,
+        service: str,
+        msg: str,
+        timeo: Optional[float] = None,
+    ) -> Optional[str]:
+        """
+        Send a request to a service.
 
+        Returns the request id if sent successfully, otherwise None.
+        """
+        req_id = create_identity("R-")
+
+        ok = self.send_multipart(
+            [COMM_HEADER_CLIENT, service, req_id, msg],
+            timeo=timeo,
+        )
+
+        return req_id if ok else None
 
     def rep(self, timeo: Optional[float] = None) -> Optional[dict]:
-        # reply with req_id, response
-        out = self.recv_multipart(timeo=timeo) # 
-        if isinstance(out, list):
-            if len(out) == 2:
-                return {'req_id':out[0], 'rep':out[1]}
-        return {'req_id':None, 'rep':None}
+        """
+        Receive a reply from the broker.
 
-    def request(self, service: str, msg: str, timeo: Optional[float] = None) -> Optional[str]:
-        status = self.req(service, msg, timeo=timeo)
-        if not status:
-            print("Could not send request to service queue")
+        Expected reply shape:
+            [req_id, response]
+
+        Returns:
+            {"req_id": req_id, "rep": response}
+
+        Or None if no valid reply was received.
+        """
+        out = self.recv_multipart(timeo=timeo)
+
+        if not isinstance(out, list) or len(out) != 2:
             return None
-        return self.rep(timeo=timeo)
 
+        req_id, rep = out
 
+        return {
+            "req_id": req_id,
+            "rep": rep,
+        }
 
+    def request(
+        self,
+        service: str,
+        msg: str,
+        timeo: Optional[float] = None,
+    ) -> Optional[dict]:
+        """
+        Send a request and wait for one reply.
+        """
+        req_id = self.req(service, msg, timeo=timeo)
+
+        if req_id is None:
+            if self.info:
+                print("Could not send request to service queue")
+            return None
+
+        rep = self.rep(timeo=timeo)
+
+        if rep is None:
+            return None
+
+        if rep.get("req_id") != req_id:
+            if self.info:
+                print("Received reply for a different request id")
+            return None
+
+        return rep
