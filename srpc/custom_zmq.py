@@ -30,7 +30,7 @@ COMM_TYPE_ERROR = "ERR"
 COMM_MSG_HEARTBEAT = ""
 
 DEFAULT_SOCKET_TIMEOUT = 1.0
-DEFAULT_REQUEST_TTL = 60.0
+REQUEST_MAX_WORK_TIME = 80.0
 DEFAULT_MAX_PENDING_REQUESTS = 10_000
 
 
@@ -374,11 +374,11 @@ class ZMQServiceBrokerService:
     def __init__(
         self,
         name: str,
-        request_ttl: float = DEFAULT_REQUEST_TTL,
+        request_max_work_time: float = REQUEST_MAX_WORK_TIME,
         max_pending_requests: int = DEFAULT_MAX_PENDING_REQUESTS,
     ):
         self.name = name
-        self.request_ttl = request_ttl
+        self.request_max_work_time = request_max_work_time
         self.max_pending_requests = max_pending_requests
 
         self.requests: Deque[PendingRequest] = deque()
@@ -395,7 +395,7 @@ class ZMQServiceBrokerService:
                 client_id=client_id,
                 req_id=req_id,
                 payload=payload,
-                expiry=time.time() + self.request_ttl,
+                expiry=time.time() + self.request_max_work_time,
             )
         )
         return None
@@ -423,7 +423,7 @@ class ZMQServiceBrokerService:
             client_id=req.client_id,
             req_id=req.req_id,
             payload=req.payload,
-            expiry=time.time() + self.request_ttl,
+            expiry=time.time() + self.request_max_work_time,
         )
 
     def next_worker(self) -> str:
@@ -519,7 +519,7 @@ class ZMQServiceBroker:
         addr: str,
         timeo: int = 1000,
         stop_event: Optional[threading.Event] = None,
-        request_ttl: float = DEFAULT_REQUEST_TTL,
+        request_max_work_time: float = REQUEST_MAX_WORK_TIME,
         max_pending_requests: int = DEFAULT_MAX_PENDING_REQUESTS,
     ):
         self.addr = addr
@@ -530,7 +530,7 @@ class ZMQServiceBroker:
 
         self.timeo = timeo
         self.stop_event = stop_event or threading.Event()
-        self.request_ttl = request_ttl
+        self.request_max_work_time = request_max_work_time
         self.max_pending_requests = max_pending_requests
         self.services: Dict[str, ZMQServiceBrokerService] = {}
 
@@ -562,7 +562,7 @@ class ZMQServiceBroker:
         if service_name not in self.services:
             self.services[service_name] = ZMQServiceBrokerService(
                 service_name,
-                request_ttl=self.request_ttl,
+                request_max_work_time=self.request_max_work_time,
                 max_pending_requests=self.max_pending_requests,
             )
         return self.services[service_name]
