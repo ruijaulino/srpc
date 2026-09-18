@@ -214,7 +214,7 @@ def ZMQProxy(pub_addr:str, sub_addr:str, topics_no_cache = ['trigger'], stop_eve
         except KeyboardInterrupt:
             break
         except Exception as e:
-            infoprint(f'Error in proxy: ', e)
+            infoprint(f'Error in proxy: {e}')
             break
 
     infoprint(f'Terminating Proxy')
@@ -584,7 +584,7 @@ class ZMQServiceBroker:
         for service_name, service in self.services.items():
             errors = service.purge()
             for client_id, req_id, error in errors:
-                infoprint(client_id, req_id, error)
+                infoprint(f"{client_id} {req_id} {error}")
                 self.send_client_error(client_id, req_id, error)
             if not service.has_workers() and not service.requests:
                 empty_services.append(service_name)
@@ -677,7 +677,7 @@ class ZMQServiceBroker:
                         break
                 except Exception as e:
                     # Production hardening: log bad input/state, but do not kill the broker.
-                    infoprint("Unexpected broker error: ", e)
+                    infoprint(f"Unexpected broker error: {e}")
         finally:
             infoprint(f"Terminating ZMQServiceBroker on {self.addr}")
             self.socket.close(linger=0)
