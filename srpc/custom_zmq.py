@@ -90,7 +90,7 @@ def decode_msg(msg: Union[bytes, List[bytes]]) -> Union[str, List[str]]:
 class ZMQPub:
     def __init__(self, ctx:zmq.Context = None, timeo:int = 1):
         self.ctx = ctx
-        self.timeo = 1000*timeo if timeo else 1000        
+        self.timeo = int(1000 * timeo)
         self.addr = None
         self.socket = None
 
@@ -113,7 +113,7 @@ class ZMQSub:
     def __init__(self, ctx:zmq.Context = None, last_msg_only:bool = False, timeo:int = 1):
         self.ctx = ctx
         self.conflate = 1 if last_msg_only else 0
-        self.timeo = 1000*timeo if timeo else 1000        
+        self.timeo = int(1000 * timeo)
         self.addr = None
         self.socket = None
 
@@ -121,7 +121,6 @@ class ZMQSub:
         self.addr = addr
         self.socket = self.ctx.socket(zmq.SUB)
         self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.setsockopt(zmq.CONFLATE, self.conflate) 
         self.socket.connect(self.addr)
         # time.sleep(1) # make sure all connections have time to be established
 
@@ -132,15 +131,21 @@ class ZMQSub:
         self.socket.subscribe(topic.encode())
     
     def recv(self):
-        # if we get a KeyboardInterrupt (or other error...) while listening we return a topic = -1
-        try:
-            if (self.socket.poll(self.timeo) & zmq.POLLIN) != 0:
-                topic, msg = self.socket.recv_multipart()
-                return topic.decode(), msg.decode()
-        except:
-            return -1, None
-        return None, None
-    
+        if not self.socket.poll(self.timeo, zmq.POLLIN):
+            return None, None
+        frames = self.socket.recv_multipart()
+        if self.conflate:
+            # CONFLATE cannot preserve multipart topic/payload messages. Drain
+            # complete messages instead, bounded to avoid starving the caller.
+            for _ in range(10000):
+                try:
+                    frames = self.socket.recv_multipart(zmq.NOBLOCK)
+                except zmq.Again:
+                    break
+        if len(frames) != 2:
+            raise ValueError("subscription message must contain topic and payload")
+        return frames[0].decode(), frames[1].decode()
+
     def close(self):
         self.socket.close()
 
@@ -407,7 +412,10 @@ class ZMQServiceBrokerService:
 
         self.worker_expiry[worker_id] = time.time() + COMM_HEARTBEAT_INTERVAL*COMM_WORKER_EXPIRY_FACTOR
 
-        # A worker that contacts us is ready again. Remove stale duplicate readiness.
+        if worker_id in self.inflight_by_worker:
+            return
+
+        # An idle worker that contacts us is ready again. Remove stale duplicate readiness.
         try:
             self.ready_workers.remove(worker_id)
         except ValueError:
@@ -603,7 +611,7 @@ class ZMQServiceBroker:
         service = self.require_service(service_name)
         error = service.add_request(sender, reqid, payload)
         if error:
-            self.send_client_error(sender, 'UNK', error)
+            self.send_client_error(sender, reqid, error)
             return
         self.dispatch(service)
 
@@ -616,21 +624,23 @@ class ZMQServiceBroker:
         comm_type = frames.pop(0)
         service_name = frames.pop(0)
         service = self.require_service(service_name)
-        service.add_worker(sender)
-
         if comm_type == COMM_TYPE_HEARTBEAT:
+            service.add_worker(sender)
             self.send([sender, COMM_TYPE_HEARTBEAT, COMM_MSG_HEARTBEAT])
-
         elif comm_type == COMM_TYPE_REP:
-            # Expected remaining frames: [client_id, payload]
             if len(frames) != 3:
-                infoprint(f"Wrong reply format from worker {sender}: {frames}")
-            else:
-                client_id, req_id, payload = frames
+                return
+            client_id, req_id, payload = frames
+            inflight = service.inflight_by_worker.get(sender)
+            if inflight is not None:
+                if (inflight.client_id, inflight.req_id) != (client_id, req_id):
+                    return
+                service.inflight_by_worker.pop(sender)
                 self.send_client_reply(client_id, req_id, payload)
-
+            # A late reply makes the worker idle, but is not forwarded twice.
+            service.add_worker(sender)
         else:
-            infoprint(f"Unknown worker comm_type from {sender}: {comm_type}")
+            return
 
         self.dispatch(service)
 
@@ -775,44 +785,6 @@ class ZMQServiceBrokerWorker(ZMQR):
 # Client
 # -----------------------------------------------------------------------------
 
-# class ZMQServiceBrokerClient(ZMQR):
-#     def __init__(self, ctx: zmq.Context, info: bool = True):
-#         super().__init__(
-#             ctx=ctx,
-#             zmq_type=zmq.DEALER, # REQ
-#             timeo=COMM_HEARTBEAT_INTERVAL / 10,
-#             identity=create_identity("C-"),
-#             reconnect=True,
-#         )
-#         self.info = info
-
-#     def connect(self, addr: Optional[str] = None) -> None:
-#         self.set_identity(create_identity("C-"))
-#         self._connect(addr)
-#         if self.info:
-#             infoprint(f"Client {self.identity} ready", self.identity)
-
-#     def req(self, service: str, msg: str, timeo: Optional[float] = None) -> bool:
-#         reqid = create_identity("R-")
-#         out = self.send_multipart([COMM_HEADER_CLIENT, service, reqid, msg], timeo=timeo)
-#         if out: return reqid
-#         return False
-
-
-#     def rep(self, timeo: Optional[float] = None) -> Optional[dict]:
-#         # reply with req_id, response
-#         out = self.recv_multipart(timeo=timeo) # 
-#         if isinstance(out, list):
-#             if len(out) == 2:
-#                 return {'req_id':out[0], 'rep':out[1]}
-#         return {'req_id':None, 'rep':None}
-
-#     def request(self, service: str, msg: str, timeo: Optional[float] = None) -> Optional[str]:
-#         status = self.req(service, msg, timeo=timeo)
-#         if not status:
-#             infoprint("Could not send request to service queue")
-#             return None
-#         return self.rep(timeo=timeo)
 
 class ZMQServiceBrokerClient(ZMQR):
     def __init__(self, ctx: zmq.Context, info: bool = True):
@@ -821,7 +793,7 @@ class ZMQServiceBrokerClient(ZMQR):
             zmq_type=zmq.DEALER,
             timeo=COMM_HEARTBEAT_INTERVAL / 10,
             identity=create_identity("C-"),
-            reconnect=True,
+            reconnect=False,
         )
         self.info = info
 

@@ -1,3 +1,4 @@
+from pathlib import Path
 from setuptools import setup, find_packages
 
 setup(
@@ -6,12 +7,13 @@ setup(
     author='Rui Jaulino',
     author_email='rui_jaulino@protonmail.com',
     description='Simple RPC framework in Python',
-    long_description=open('README.md').read(),
+    long_description=Path(__file__).with_name('README.md').read_text(encoding='utf-8'),
     long_description_content_type='text/markdown',
     url='https://github.com/ruijaulibo/srpc',  # URL to your package's repository
     packages=find_packages(),  # Automatically find your packages
     install_requires=[
-        'numpy>=1.23.1', 
+        'pyzmq>=23',
+        'pytz',
         'pandas>=1.3.5', 
     ],
     classifiers=[

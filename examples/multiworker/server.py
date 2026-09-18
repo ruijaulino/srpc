@@ -1,4 +1,4 @@
-from srpc import SRPCServer
+from srpc import SRPCServer, rpc_method
 import time
 
 class MultiworkerServer(SRPCServer):
@@ -24,6 +24,7 @@ class MultiworkerServer(SRPCServer):
                             worker_info = True
                             )
 
+    @rpc_method
     def somemethod(self, param):
         print('Got param: ', param)
         time.sleep(1)

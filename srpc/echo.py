@@ -6,13 +6,13 @@ import os
 import datetime as dt
 import time
 try:
-    from .server import SRPCServer
+    from .server import SRPCServer, rpc_method
     from .utils import SRPCTopic   
     from .client import SRPCClient
     from .defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
 
 except ImportError:
-    from server import SRPCServer
+    from server import SRPCServer, rpc_method
     from utils import SRPCTopic
     from client import SRPCClient
     from defaults import REGISTRY_ADDR, REGISTRY_HEARTBEAT, NO_REP_MSG, NO_REQ_MSG
@@ -44,6 +44,7 @@ class Echo(SRPCServer):
         self.delay = delay
 
 
+    @rpc_method
     def echo(self, msg = ''):
         print('Calling echo')
         time.sleep(self.delay)
@@ -58,10 +59,11 @@ class EchoClient(SRPCClient):
         if no_req_msg: self.srpc_client.no_req_msg = no_req_msg
 
     def echo(self, msg, collect = True):
-        return self.srpc_client.invoque(service = self.service_name, method = 'echo', collect = collect, args = [], kwargs = {'msg':msg}, close = False)
+        method = self.srpc_client.invoke if collect else self.srpc_client.send
+        return method(service=self.service_name, method='echo', kwargs={'msg': msg})
         
     def collect(self):
-        return self.srpc_client.collect()
+        return self.srpc_client.receive_any()
 
 def test_server():
 

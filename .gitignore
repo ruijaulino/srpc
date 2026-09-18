@@ -111,3 +111,5 @@ env/
 *.swp
 *~
 *.pkl
+
+.venv/
